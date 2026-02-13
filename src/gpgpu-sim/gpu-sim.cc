@@ -369,6 +369,16 @@ void shader_core_config::reg_options(class OptionParser *opp) {
                          "l1 banks hashing function", "0");
   option_parser_register(opp, "-gpgpu_l1_latency", OPT_UINT32,
                          &m_L1D_config.l1_latency, "L1 Hit Latency", "1");
+  option_parser_register(opp, "-gpgpu_cache:tlb", OPT_CSTR, &m_tlb_config.m_config_string,
+                        "per-shader tlb config "
+                        " {<nsets>:<bsize>:<assoc>:<wr>:<alloc> | none}",
+                        "1:4096:16:L:m" );
+  option_parser_register(opp, "-gpgpu_tlb_latency", OPT_UINT32, &m_tlb_config.tlb_latency,
+                        "L1 TLB Miss Latency",
+                        "80");
+  option_parser_register(opp, "-gpgpu_tlb_lookup_latency", OPT_UINT32, &m_tlb_config.tlb_lookup_latency,
+                        "L1 TLB Lookup Latency",
+                        "20");
   option_parser_register(opp, "-gpgpu_smem_latency", OPT_UINT32, &smem_latency,
                          "smem Latency", "3");
   option_parser_register(opp, "-gpgpu_cache:dl1PrefL1", OPT_CSTR,

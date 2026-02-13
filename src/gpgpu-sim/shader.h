@@ -1406,6 +1406,9 @@ class ldst_unit : public pipelined_simd_unit {
   void get_L1D_sub_stats(struct cache_sub_stats &css) const;
   void get_L1C_sub_stats(struct cache_sub_stats &css) const;
   void get_L1T_sub_stats(struct cache_sub_stats &css) const;
+  void get_TLB_sub_stats(struct cache_sub_stats &tss) const;
+
+  void update_tlb_lookup_queue();
 
  protected:
   ldst_unit(mem_fetch_interface *icnt,
@@ -1430,6 +1433,8 @@ class ldst_unit : public pipelined_simd_unit {
                      mem_stage_access_type &fail_type);
   bool memory_cycle(warp_inst_t &inst, mem_stage_stall_type &rc_fail,
                     mem_stage_access_type &fail_type);
+  bool tlb_cycle( warp_inst_t &inst, mem_stage_stall_type &rc_fail, 
+                    mem_stage_access_type &fail_type);
 
   virtual mem_stage_stall_type process_cache_access(
       cache_t *cache, new_addr_type address, warp_inst_t &inst,
@@ -1451,6 +1456,8 @@ class ldst_unit : public pipelined_simd_unit {
   tex_cache *m_L1T;        // texture cache
   read_only_cache *m_L1C;  // constant cache
   l1_cache *m_L1D;         // data cache
+  tlb *m_tlb;
+
   std::map<unsigned /*warp_id*/,
            std::map<unsigned /*regnum*/, unsigned /*count*/>>
       m_pending_writes;
@@ -1473,7 +1480,11 @@ class ldst_unit : public pipelined_simd_unit {
   unsigned long long m_last_inst_gpu_tot_sim_cycle;
 
   std::vector<std::deque<mem_fetch *>> l1_latency_queue;
+  std::vector<mem_fetch* > tlb_latency_queue;
+  std::vector<std::pair<unsigned, unsigned>> tlb_lookup_queue;
+
   void L1_latency_queue_cycle();
+  void tlb_latency_queue_cycle();
 };
 
 enum pipeline_stage_name_t {
@@ -1564,6 +1575,7 @@ class shader_core_config : public core_config {
     m_L1T_config.init(m_L1T_config.m_config_string, FuncCachePreferNone);
     m_L1C_config.init(m_L1C_config.m_config_string, FuncCachePreferNone);
     m_L1D_config.init(m_L1D_config.m_config_string, FuncCachePreferNone);
+    m_tlb_config.init(m_tlb_config.m_config_string,FuncCachePreferNone);
     gpgpu_cache_texl1_linesize = m_L1T_config.get_line_sz();
     gpgpu_cache_constl1_linesize = m_L1C_config.get_line_sz();
     m_valid = true;
@@ -1637,6 +1649,7 @@ class shader_core_config : public core_config {
   mutable cache_config m_L1T_config;
   mutable cache_config m_L1C_config;
   mutable l1d_cache_config m_L1D_config;
+  mutable tlb_cache_config m_tlb_config;
 
   bool gpgpu_dwf_reg_bankconflict;
 
@@ -2136,6 +2149,7 @@ class shader_core_ctx : public core_t {
   void get_L1D_sub_stats(struct cache_sub_stats &css) const;
   void get_L1C_sub_stats(struct cache_sub_stats &css) const;
   void get_L1T_sub_stats(struct cache_sub_stats &css) const;
+  void get_TLB_sub_stats(struct cache_sub_stats &css) const;
 
   void get_icnt_power_stats(long &n_simt_to_mem, long &n_mem_to_simt) const;
 
@@ -2653,6 +2667,7 @@ class simt_core_cluster {
   void get_L1D_sub_stats(struct cache_sub_stats &css) const;
   void get_L1C_sub_stats(struct cache_sub_stats &css) const;
   void get_L1T_sub_stats(struct cache_sub_stats &css) const;
+  void get_TLB_sub_stats(struct cache_sub_stats &css) const;
 
   void get_icnt_stats(long &n_simt_to_mem, long &n_mem_to_simt) const;
   float get_current_occupancy(unsigned long long &active,

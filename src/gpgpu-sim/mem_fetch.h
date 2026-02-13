@@ -100,6 +100,8 @@ class mem_fetch {
   bool isconst() const;
   enum mf_type get_type() const { return m_type; }
   bool isatomic() const;
+  void set_tlb(bool value) { tlb_miss = value;}
+  bool get_tlb() { return tlb_miss;}
 
   void set_return_timestamp(unsigned t) { m_timestamp2 = t; }
   void set_icnt_receive_time(unsigned t) { m_icnt_receive_time = t; }
@@ -161,6 +163,7 @@ class mem_fetch {
                           // onto icnt to shader; only used for reads
   unsigned m_icnt_receive_time;  // set to gpu_sim_cycle + interconnect_latency
                                  // when fixed icnt latency mode is enabled
+  bool tlb_miss;
 
   // requesting instruction (put last so mem_fetch prints nicer in gdb)
   warp_inst_t m_inst;

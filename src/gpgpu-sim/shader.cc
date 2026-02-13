@@ -62,6 +62,7 @@ mem_fetch *shader_core_mem_fetch_allocator::alloc(
   mem_fetch *mf = new mem_fetch(
       access, NULL, streamID, wr ? WRITE_PACKET_SIZE : READ_PACKET_SIZE, -1,
       m_core_id, m_cluster_id, m_memory_config, cycle);
+  assert(mf);
   return mf;
 }
 
@@ -76,6 +77,7 @@ mem_fetch *shader_core_mem_fetch_allocator::alloc(
   mem_fetch *mf = new mem_fetch(
       access, NULL, streamID, wr ? WRITE_PACKET_SIZE : READ_PACKET_SIZE, wid,
       m_core_id, m_cluster_id, m_memory_config, cycle, original_mf);
+  assert(mf);
   return mf;
 }
 /////////////////////////////////////////////////////////////////////////////
@@ -992,6 +994,7 @@ void shader_core_ctx::fetch() {
               acc, NULL, m_warp[warp_id]->get_kernel_info()->get_streamID(),
               READ_PACKET_SIZE, warp_id, m_sid, m_tpc, m_memory_config,
               m_gpu->gpu_tot_sim_cycle + m_gpu->gpu_sim_cycle);
+          assert(mf);
           std::list<cache_event> events;
           enum cache_request_status status;
           if (m_config->perfect_inst_const_cache) {
@@ -1860,6 +1863,9 @@ void ldst_unit::get_L1C_sub_stats(struct cache_sub_stats &css) const {
 void ldst_unit::get_L1T_sub_stats(struct cache_sub_stats &css) const {
   if (m_L1T) m_L1T->get_sub_stats(css);
 }
+void ldst_unit::get_TLB_sub_stats(struct cache_sub_stats &css) const {
+  if (m_tlb) m_tlb->get_sub_stats(css);
+}
 
 // Add this function to unset depbar
 void shader_core_ctx::unset_depbar(const warp_inst_t &inst) {
@@ -2051,6 +2057,7 @@ mem_stage_stall_type ldst_unit::process_memory_access_queue(cache_t *cache,
   mem_fetch *mf = m_mf_allocator->alloc(
       inst, inst.accessq_back(),
       m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle);
+  assert(mf);
   std::list<cache_event> events;
   enum cache_request_status status = cache->access(
       mf->get_addr(), mf,
@@ -2324,6 +2331,72 @@ bool ldst_unit::memory_cycle(warp_inst_t &inst,
       access_type = (iswrite) ? G_MEM_ST : G_MEM_LD;
   }
   return inst.accessq_empty();
+}
+
+bool ldst_unit::tlb_cycle(warp_inst_t &inst, mem_stage_stall_type &stall_reason, mem_stage_access_type &access_type)
+{
+    //warp_inst_t *to_print = &inst;
+    mem_stage_stall_type result = NO_RC_FAIL;
+    bool iswrite = inst.is_store();
+    if (inst.space.is_local())
+      access_type = (iswrite) ? L_MEM_ST : L_MEM_LD;
+    else
+      access_type = (iswrite) ? G_MEM_ST : G_MEM_LD;
+    
+    if (inst.accessq_empty())
+        return true;
+
+    unsigned wid = inst.warp_id();
+    auto it = std::find_if(tlb_lookup_queue.begin(), tlb_lookup_queue.end(),
+                           [wid](const std::pair<unsigned, unsigned>& element) {
+                                return element.first == wid;
+                           });
+    if (it == tlb_lookup_queue.end()){
+        tlb_lookup_queue.push_back(std::make_pair(wid, 0));
+        stall_reason = COAL_STALL;
+        return false;
+    }
+
+    if (it->second < m_config->m_tlb_config.tlb_lookup_latency){
+        stall_reason = COAL_STALL;
+        return false;
+    }
+
+    mem_fetch *mf = m_mf_allocator->alloc(inst, inst.accessq_back(), m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle);
+    assert(mf);
+
+    std::list<cache_event> events;
+    //mf->print(stdout, 1);
+    assert(m_config->m_tlb_config.tlb_latency > 0);
+    if (tlb_latency_queue[m_config->m_tlb_config.tlb_latency - 1] != NULL) {
+        stall_reason = COAL_STALL;
+        delete mf; 
+        return 0; 
+    }
+    enum cache_request_status status = m_tlb->access(mf->get_addr(), mf, m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle, events);
+    // if (mf->get_tlb() == true)
+    if (status == MISS)
+    {
+        if ((tlb_latency_queue[m_config->m_tlb_config.tlb_latency - 1]) == NULL)
+        {
+            //fprintf(stdout, "Inserting mf in tlb called");
+            tlb_latency_queue[m_config->m_tlb_config.tlb_latency - 1] = mf;
+        }
+    }
+    else{
+      delete (mf);
+    }
+    //return 1;
+    if (status != HIT)
+    {
+        stall_reason = COAL_STALL;
+        return 0;
+    }
+    else
+    {
+        tlb_lookup_queue.erase(it);
+        return 1;
+    }
 }
 
 bool ldst_unit::response_buffer_full() const {
@@ -2611,6 +2684,7 @@ void ldst_unit::init(mem_fetch_interface *icnt,
                               get_shader_constant_cache_id(), icnt,
                               IN_L1C_MISS_QUEUE, OTHER_GPU_CACHE, m_gpu);
   m_L1D = NULL;
+  m_tlb = NULL;
   m_mem_rc = NO_RC_FAIL;
   m_num_writeback_clients =
       5;  // = shared memory, global/local (uncached), L1D, L1T, L1C
@@ -2646,8 +2720,23 @@ ldst_unit::ldst_unit(mem_fetch_interface *icnt,
       l1_latency_queue[j].resize(m_config->m_L1D_config.l1_latency,
                                  (mem_fetch *)NULL);
   }
+
+  if (!m_config->m_tlb_config.disabled()) {
+      char tlb_name[STRSIZE];
+      snprintf(tlb_name, STRSIZE, "tlb_%03d", m_sid);
+      tlb_block_t **new_lines = new tlb_block_t* [m_config->m_tlb_config.get_max_num_lines()];
+      for (unsigned i = 0; i < m_config->m_tlb_config.get_max_num_lines(); i++)
+          new_lines[i] = new tlb_block_t();
+
+      m_tlb = new tlb(tlb_name, m_config->m_tlb_config, m_sid, new_lines);
+
+      if(m_config->m_tlb_config.tlb_latency > 0){
+          tlb_latency_queue.resize(m_config->m_tlb_config.tlb_latency, (mem_fetch *)NULL);
+      }
+  }
   m_name = "MEM ";
 }
+
 
 ldst_unit::ldst_unit(mem_fetch_interface *icnt,
                      shader_core_mem_fetch_allocator *mf_allocator,
@@ -2809,6 +2898,7 @@ unsigned ldst_unit::clock_multiplier() const {
   else
     return m_config->mem_warp_parts;
 }
+
 /*
 void ldst_unit::issue( register_set &reg_set )
 {
@@ -2894,7 +2984,29 @@ void ldst_unit::cycle() {
       }
     }
   }
+  if (m_tlb)
+  {
+    if (tlb_latency_queue[0] != NULL)
+    {
+        m_tlb->fill(tlb_latency_queue[0], m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle) ;
+        delete (tlb_latency_queue[0]);
+        tlb_latency_queue[0] = NULL;
+    }
 
+    for (unsigned stage = 0; stage <m_config->m_tlb_config.tlb_latency - 1; ++stage){
+        if (tlb_latency_queue[stage] == NULL)
+        {
+            tlb_latency_queue[stage] = tlb_latency_queue[stage + 1];
+            tlb_latency_queue[stage + 1] = NULL;
+        }
+      }
+
+    for (auto &it : tlb_lookup_queue){
+        if (it.second < m_config->m_tlb_config.tlb_lookup_latency){
+            it.second += 1;
+        }
+    }
+  }
   m_L1T->cycle();
   m_L1C->cycle();
   if (m_L1D) {
@@ -2909,7 +3021,22 @@ void ldst_unit::cycle() {
   done &= shared_cycle(pipe_reg, rc_fail, type);
   done &= constant_cycle(pipe_reg, rc_fail, type);
   done &= texture_cycle(pipe_reg, rc_fail, type);
-  done &= memory_cycle(pipe_reg, rc_fail, type);
+  if (m_tlb && tlb_cycle(pipe_reg, rc_fail, type) == 1)
+  {
+      done &= memory_cycle(pipe_reg, rc_fail, type);
+  }
+  else if(!m_tlb)
+  {
+      done &= memory_cycle(pipe_reg, rc_fail, type);
+  }
+  else {
+    done = false;
+  }
+  // done &= memory_cycle(pipe_reg, rc_fail, type);
+  if (rc_fail == COAL_STALL)
+  {
+      done = false;
+  }
   m_mem_rc = rc_fail;
 
   if (!done) {  // log stall types and return
@@ -3178,6 +3305,26 @@ void gpgpu_sim::shader_print_cache_stats(FILE *fout) const {
             total_css.pending_hits);
     fprintf(fout, "\tL1T_total_cache_reservation_fails = %llu\n",
             total_css.res_fails);
+  }
+  // TLB
+  if (!m_shader_config->m_tlb_config.disabled()) {
+      total_css.clear();
+      css.clear();
+      fprintf(fout, "TLB:\n");
+      for (unsigned i = 0; i < m_shader_config->n_simt_clusters; ++i) {
+          m_cluster[i]->get_TLB_sub_stats(css);
+          total_css += css;
+      }
+      fprintf(fout, "\tTLB_total_accesses = %llu\n", total_css.accesses);
+      fprintf(fout, "\tTLB_total_misses = %llu\n", total_css.misses);
+      if (total_css.accesses > 0) {
+          fprintf(fout, "\tTLB_total_miss_rate = %.4lf\n",
+                  (double)total_css.misses / (double)total_css.accesses);
+      }
+      fprintf(fout, "\tTLB_total_pending_hits = %llu\n",
+              total_css.pending_hits);
+      fprintf(fout, "\tTLB_total_reservation_fails = %llu\n",
+              total_css.res_fails);
   }
 }
 
@@ -4063,6 +4210,9 @@ void shader_core_ctx::get_L1C_sub_stats(struct cache_sub_stats &css) const {
 void shader_core_ctx::get_L1T_sub_stats(struct cache_sub_stats &css) const {
   m_ldst_unit->get_L1T_sub_stats(css);
 }
+void shader_core_ctx::get_TLB_sub_stats(struct cache_sub_stats &css) const {
+  m_ldst_unit->get_TLB_sub_stats(css);
+}
 
 void shader_core_ctx::get_icnt_power_stats(long &n_simt_to_mem,
                                            long &n_mem_to_simt) const {
@@ -4876,6 +5026,17 @@ void simt_core_cluster::get_L1T_sub_stats(struct cache_sub_stats &css) const {
   total_css.clear();
   for (unsigned i = 0; i < m_config->n_simt_cores_per_cluster; ++i) {
     m_core[i]->get_L1T_sub_stats(temp_css);
+    total_css += temp_css;
+  }
+  css = total_css;
+}
+void simt_core_cluster::get_TLB_sub_stats(struct cache_sub_stats &css) const {
+  struct cache_sub_stats temp_css;
+  struct cache_sub_stats total_css;
+  temp_css.clear();
+  total_css.clear();
+  for (unsigned i = 0; i < m_config->n_simt_cores_per_cluster; ++i) {
+    m_core[i]->get_TLB_sub_stats(temp_css);
     total_css += temp_css;
   }
   css = total_css;
