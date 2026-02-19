@@ -110,6 +110,8 @@ class memory_partition_unit {
     return m_gpu;
   }
 
+  void push(mem_fetch *mf, unsigned long long cycle);
+
  private:
   unsigned m_id;
   const memory_config *m_config;

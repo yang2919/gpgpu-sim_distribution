@@ -2374,14 +2374,29 @@ bool ldst_unit::tlb_cycle(warp_inst_t &inst, mem_stage_stall_type &stall_reason,
         return 0; 
     }
     enum cache_request_status status = m_tlb->access(mf->get_addr(), mf, m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle, events);
-    // if (mf->get_tlb() == true)
     if (status == MISS)
     {
-        if ((tlb_latency_queue[m_config->m_tlb_config.tlb_latency - 1]) == NULL)
-        {
-            //fprintf(stdout, "Inserting mf in tlb called");
-            tlb_latency_queue[m_config->m_tlb_config.tlb_latency - 1] = mf;
+        // ----------------------Deprecated TLB----------------------------------------
+        // if ((tlb_latency_queue[m_config->m_tlb_config.tlb_latency - 1]) == NULL)
+        // {
+        //     //fprintf(stdout, "Inserting mf in tlb called");
+        //     tlb_latency_queue[m_config->m_tlb_config.tlb_latency - 1] = mf;
+        // }
+        // -----------------------------------------------------------------------------
+        new_addr_type miss_addr = mf->get_addr();
+
+        if (m_pending_tlb_requests.find(miss_addr) == m_pending_tlb_requests.end()) {
+            mem_fetch *l2_req_mf = m_mf_allocator->alloc(inst, inst.accessq_back(), m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
+            l2_req_mf->set_addr(miss_addr);
+            l2_req_mf->set_tlb_miss_start_time(m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
+            m_gpu->get_l2_tlb()->push_request(l2_req_mf);
+
+            m_pending_tlb_requests.insert(miss_addr);
         }
+        delete mf;
+
+        stall_reason = COAL_STALL;
+        return false;
     }
     else{
       delete (mf);
@@ -2399,15 +2414,53 @@ bool ldst_unit::tlb_cycle(warp_inst_t &inst, mem_stage_stall_type &stall_reason,
     }
 }
 
+void ldst_unit::process_tlb_responses() {
+  shared_l2_tlb* l2_tlb = m_gpu->get_l2_tlb();
+  if (!l2_tlb) return;
+
+  while (true) {
+      mem_fetch *mf = l2_tlb->pop_response(m_sid);
+      if (!mf) break; 
+
+      unsigned long long current_cycle = m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle;
+      m_tlb->fill(mf, current_cycle);
+
+      unsigned long long turnaround = current_cycle - mf->get_tlb_miss_start_time();
+      printf("[TLB TIMING] SM %u | VA: 0x%llx | L2 TLB HIT | Turnaround: %llu cycles\n", 
+              m_sid, mf->get_addr(), turnaround);
+
+      m_pending_tlb_requests.erase(mf->get_addr());
+      delete mf; 
+    }
+}
+
 bool ldst_unit::response_buffer_full() const {
   return m_response_fifo.size() >= m_config->ldst_unit_response_queue_size;
 }
 
 void ldst_unit::fill(mem_fetch *mf) {
-  mf->set_status(
-      IN_SHADER_LDST_RESPONSE_FIFO,
-      m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle);
-  m_response_fifo.push_back(mf);
+  if (mf->is_ptw()) {
+        unsigned long long current_cycle = m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle;
+        
+        mf->set_addr(mf->get_tlb_miss_va());
+
+        m_gpu->get_l2_tlb()->fill(mf, current_cycle);
+        m_tlb->fill(mf, current_cycle);
+
+        unsigned long long turnaround = current_cycle - mf->get_tlb_miss_start_time();
+        printf("[TLB TIMING] SM %u | VA: 0x%llx | DRAM PTW   | Turnaround: %llu cycles\n", 
+               m_sid, mf->get_tlb_miss_va(), turnaround);
+        m_pending_tlb_requests.erase(mf->get_tlb_miss_va());
+        
+        delete mf;
+        return;
+  }
+  else{
+    mf->set_status(
+        IN_SHADER_LDST_RESPONSE_FIFO,
+        m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle);
+    m_response_fifo.push_back(mf);
+  }
 }
 
 void ldst_unit::flush() {
@@ -3013,6 +3066,7 @@ void ldst_unit::cycle() {
     m_L1D->cycle();
     if (m_config->m_L1D_config.l1_latency > 0) L1_latency_queue_cycle();
   }
+  process_tlb_responses();
 
   warp_inst_t &pipe_reg = *m_dispatch_reg;
   enum mem_stage_stall_type rc_fail = NO_RC_FAIL;

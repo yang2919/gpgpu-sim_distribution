@@ -319,6 +319,13 @@ void memory_config::reg_options(class OptionParser *opp) {
       "elimnate_rw_turnaround i.e set tWTR and tRTW = 0", "0");
   option_parser_register(opp, "-icnt_flit_size", OPT_UINT32, &icnt_flit_size,
                          "icnt_flit_size", "32");
+  option_parser_register(opp, "-gpgpu_cache:l2tlb", OPT_CSTR, &m_l2_tlb_config.m_config_string,
+                           "Global L2 TLB config {<nsets>:<bsize>:<assoc>:<wr>:<alloc> | none}",
+                           "1:4096:64:L:m");
+  option_parser_register(opp, "-gpgpu_l2_tlb_hit_latency", OPT_UINT32, &m_l2_tlb_config.l2_tlb_hit_latency,
+                          "L2 TLB Hit Latency (cycles)", "20");
+  option_parser_register(opp, "-gpgpu_l2_tlb_miss_latency", OPT_UINT32, &m_l2_tlb_config.l2_tlb_miss_latency,
+                          "L2 TLB Miss (PTW) Latency (cycles)", "200");
   // SST mode activate
   option_parser_register(opp, "-SST_mode", OPT_BOOL, &SST_mode, "SST mode",
                          "0");
@@ -1021,6 +1028,11 @@ gpgpu_sim::gpgpu_sim(const gpgpu_sim_config &config, gpgpu_context *ctx)
   last_streamID = -1;
 
   gpu_kernel_time.clear();
+  if(!m_memory_config->m_l2_tlb_config.disabled()){
+    m_l2_tlb = new shared_l2_tlb(m_memory_config->m_l2_tlb_config, this);
+  } else{
+    m_l2_tlb = NULL;
+  }
 
   // TODO: somehow move this logic to the sst_gpgpu_sim constructor?
   if (!m_config.is_SST_mode()) {
@@ -2033,6 +2045,11 @@ void gpgpu_sim::cycle() {
   }
 
   // L2 operations follow L2 clock domain
+
+  if (m_l2_tlb){
+    m_l2_tlb->cycle();
+  }
+
   unsigned partiton_reqs_in_parallel_per_cycle = 0;
   if (clock_mask & L2) {
     m_power_stats->pwr_mem_stat->l2_cache_stats[CURRENT_STAT_IDX].clear();
@@ -2217,6 +2234,10 @@ void gpgpu_sim::cycle() {
     gpgpu_ctx->device_runtime->launch_one_device_kernel();
 #endif
   }
+}
+
+void gpgpu_sim::push_to_memory_partition(unsigned part_id, mem_fetch *mf, unsigned long long cycle) {
+    m_memory_partition_unit[part_id]->push(mf, cycle);
 }
 
 void sst_gpgpu_sim::cycle() {

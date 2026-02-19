@@ -879,3 +879,10 @@ void memory_sub_partition::visualizer_print(gzFile visualizer_file) {
 
   clear_L2cache_stats_pw();
 }
+
+void memory_partition_unit::push(mem_fetch *mf, unsigned long long cycle) {
+    unsigned global_spid = mf->get_sub_partition_id(); 
+    unsigned local_spid = global_spid - (m_id * m_config->m_n_sub_partition_per_memory_channel);
+
+    m_sub_partition[local_spid]->push(mf, cycle);
+}

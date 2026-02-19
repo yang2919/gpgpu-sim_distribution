@@ -1485,6 +1485,10 @@ class ldst_unit : public pipelined_simd_unit {
 
   void L1_latency_queue_cycle();
   void tlb_latency_queue_cycle();
+
+  void process_tlb_responses();
+
+  std::set<new_addr_type> m_pending_tlb_requests;
 };
 
 enum pipeline_stage_name_t {

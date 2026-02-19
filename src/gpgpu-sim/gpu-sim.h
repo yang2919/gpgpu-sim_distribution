@@ -218,6 +218,7 @@ class memory_config {
     gpgpu_L2_queue_config = NULL;
     gpgpu_ctx = ctx;
   }
+  
   void init() {
     assert(gpgpu_dram_timing_opt);
     if (strchr(gpgpu_dram_timing_opt, '=') == NULL) {
@@ -306,6 +307,9 @@ class memory_config {
 
     m_address_mapping.init(m_n_mem, m_n_sub_partition_per_memory_channel);
     m_L2_config.init(&m_address_mapping);
+    if (m_l2_tlb_config.m_config_string != NULL) {
+        m_l2_tlb_config.init(m_l2_tlb_config.m_config_string, FuncCachePreferNone);
+    }
 
     m_valid = true;
 
@@ -326,6 +330,8 @@ class memory_config {
   bool m_valid;
   mutable l2_cache_config m_L2_config;
   bool m_L2_texure_only;
+
+  l2_tlb_config m_l2_tlb_config;
 
   char *gpgpu_dram_timing_opt;
   char *gpgpu_L2_queue_config;
@@ -669,6 +675,10 @@ class gpgpu_sim : public gpgpu_t {
 
   // backward pointer
   class gpgpu_context *gpgpu_ctx;
+  
+  // L2 TLB
+  shared_l2_tlb* get_l2_tlb() const {return m_l2_tlb; }
+  void push_to_memory_partition(unsigned part_id, mem_fetch *mf, unsigned long long cycle);
 
  protected:
   // clocks
@@ -743,6 +753,7 @@ class gpgpu_sim : public gpgpu_t {
   void clear_executed_kernel_info();  //< clear the kernel information after
                                       // stat printout
   virtual void createSIMTCluster() = 0;
+  shared_l2_tlb *m_l2_tlb;
 
  public:
   unsigned long long gpu_sim_insn;

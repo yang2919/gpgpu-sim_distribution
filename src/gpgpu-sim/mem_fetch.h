@@ -132,6 +132,14 @@ class mem_fetch {
   mem_fetch *get_original_mf() { return original_mf; }
   mem_fetch *get_original_wr_mf() { return original_wr_mf; }
 
+  void set_ptw(bool is_ptw) { m_is_ptw = is_ptw; }
+  bool is_ptw() const { return m_is_ptw; }
+  void set_tlb_miss_va(new_addr_type va) { m_tlb_miss_va = va; }
+  new_addr_type get_tlb_miss_va() const { return m_tlb_miss_va; }
+
+  void set_tlb_miss_start_time(unsigned long long t) { m_tlb_miss_start_time = t; }
+  unsigned long long get_tlb_miss_start_time() const { return m_tlb_miss_start_time; }
+
  private:
   // request source information
   unsigned m_request_uid;
@@ -181,6 +189,10 @@ class mem_fetch {
                      // size), so the pointer refers to the original request
   mem_fetch *original_wr_mf;  // this pointer refers to the original write req,
                               // when fetch-on-write policy is used
+  bool m_is_ptw = false;
+  new_addr_type m_tlb_miss_va = 0;
+
+  unsigned long long m_tlb_miss_start_time = 0;
 };
 
 #endif

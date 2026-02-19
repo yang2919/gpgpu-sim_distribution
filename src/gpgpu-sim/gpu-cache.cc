@@ -2346,4 +2346,81 @@ void tex_cache::display_state(FILE *fp) const {
     f.m_request->print(fp, false);
   }
 }
+
+shared_l2_tlb::shared_l2_tlb(const l2_tlb_config &config, gpgpu_sim *gpu) 
+    : m_config(config), m_gpu(gpu) 
+{
+    tlb_block_t **l2_tlb_lines = new tlb_block_t*[config.get_max_num_lines()];
+    for (unsigned i = 0; i < config.get_max_num_lines(); i++) {
+        l2_tlb_lines[i] = new tlb_block_t();
+    }
+    m_tlb = new tlb_array(const_cast<l2_tlb_config&>(config), -1, l2_tlb_lines);
+
+    m_response_queue.resize(m_gpu->get_config().num_shader());
+}
+
+shared_l2_tlb::~shared_l2_tlb() {
+    delete m_tlb;
+}
+
+void shared_l2_tlb::push_request(mem_fetch *mf) {
+    unsigned long long current_cycle = m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle;
+
+    unsigned ready_cycle = current_cycle + m_config.l2_tlb_hit_latency;
+    m_lookup_queue.push_back(std::make_pair(mf, ready_cycle));
+}
+
+mem_fetch* shared_l2_tlb::pop_response(unsigned sid) {
+    if (!m_response_queue[sid].empty()) {
+        mem_fetch *mf = m_response_queue[sid].front();
+        m_response_queue[sid].pop_front();
+        return mf;
+    }
+    return NULL;
+}
+
+void shared_l2_tlb::cycle() {
+    unsigned long long current_cycle = m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle;
+
+    auto it = m_lookup_queue.begin();
+    while (it != m_lookup_queue.end()) {
+        if (current_cycle >= it->second) {
+            // Lookup Latency 시간이 다 된 요청 처리
+            mem_fetch *mf = it->first;
+            std::list<cache_event> events;
+            
+            enum cache_request_status status = m_tlb->access(mf->get_addr(), current_cycle, mf);
+            if (status == HIT) {
+                // [HIT] 즉시 해당 SM의 응답 큐로 반환
+                m_response_queue[mf->get_sid()].push_back(mf);
+            } 
+            else if (status == MISS || status == HIT_RESERVED) {
+                // [MISS] DRAM으로 PTW 요청 전송
+                
+                // 1. PTW 플래그 및 원본 VA 세팅
+                mf->set_ptw(true);
+                mf->set_tlb_miss_va(mf->get_addr());
+                
+                // 2. 가상 주소(VA)를 페이지 테이블이 있는 물리 주소(PTE PA)로 변환 (간이 매핑)
+                new_addr_type pte_addr = mf->get_addr() * 8; // 8 byte PTE 가정
+                mf->set_addr(pte_addr);
+                
+                // 3. 목적지 DRAM 파티션 계산 및 라우팅 정보 업데이트
+                addrdec_t tlx;
+                m_gpu->getMemoryConfig()->m_address_mapping.addrdec_tlx(pte_addr, &tlx);
+                mf->set_chip(tlx.chip);
+                mf->set_partition(tlx.sub_partition);
+                
+                // 4. DRAM 파티션으로 패킷 주입 (이후 DRAM -> NoC -> SM 순으로 전달됨)
+                m_gpu->push_to_memory_partition(tlx.chip, mf, current_cycle);
+            }
+            
+            // 처리가 끝났으므로 큐에서 제거
+            it = m_lookup_queue.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 /******************************************************************************************************************************************/

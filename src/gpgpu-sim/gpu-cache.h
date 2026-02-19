@@ -2221,4 +2221,42 @@ class tex_cache : public cache_t {
   extra_mf_fields_lookup m_extra_mf_fields;
 };
 
+class l2_tlb_config : public tlb_cache_config {
+public:
+    l2_tlb_config() {
+        l2_tlb_hit_latency = 0;
+        l2_tlb_miss_latency = 0;
+    }
+    
+    unsigned l2_tlb_hit_latency;   
+    unsigned l2_tlb_miss_latency;  
+};
+
+class shared_l2_tlb {
+public:
+    shared_l2_tlb(const l2_tlb_config &config, class gpgpu_sim *gpu);
+    ~shared_l2_tlb();
+
+    void push_request(mem_fetch *mf);
+    mem_fetch* pop_response(unsigned sid);
+
+    void fill(mem_fetch *mf, unsigned long long cycle) {
+        m_tlb->fill(mf->get_addr(), cycle);
+    }
+
+    void cycle();
+
+private:
+    const l2_tlb_config &m_config;
+    class gpgpu_sim *m_gpu;
+    
+    tlb_array *m_tlb; 
+
+    std::list<mem_fetch*> m_request_queue;
+
+    std::vector<std::list<mem_fetch*>> m_response_queue;
+
+    std::list<std::pair<mem_fetch*, unsigned long long>> m_lookup_queue;
+};
+
 #endif
