@@ -2395,24 +2395,7 @@ void shared_l2_tlb::cycle() {
                 m_response_queue[mf->get_sid()].push_back(mf);
             } 
             else if (status == MISS || status == HIT_RESERVED) {
-                // [MISS] DRAM으로 PTW 요청 전송
-                
-                // 1. PTW 플래그 및 원본 VA 세팅
-                mf->set_ptw(true);
-                mf->set_tlb_miss_va(mf->get_addr());
-                
-                // 2. 가상 주소(VA)를 페이지 테이블이 있는 물리 주소(PTE PA)로 변환 (간이 매핑)
-                new_addr_type pte_addr = mf->get_addr() * 8; // 8 byte PTE 가정
-                mf->set_addr(pte_addr);
-                
-                // 3. 목적지 DRAM 파티션 계산 및 라우팅 정보 업데이트
-                addrdec_t tlx;
-                m_gpu->getMemoryConfig()->m_address_mapping.addrdec_tlx(pte_addr, &tlx);
-                mf->set_chip(tlx.chip);
-                mf->set_partition(tlx.sub_partition);
-                
-                // 4. DRAM 파티션으로 패킷 주입 (이후 DRAM -> NoC -> SM 순으로 전달됨)
-                m_gpu->push_to_memory_partition(tlx.chip, mf, current_cycle);
+                m_gpu->get_ptw()->walk(mf, current_cycle);
             }
             
             // 처리가 끝났으므로 큐에서 제거
@@ -2421,6 +2404,53 @@ void shared_l2_tlb::cycle() {
             ++it;
         }
     }
+}
+
+// gpgpu-sim/gpu-cache.cc
+
+page_table_walker::page_table_walker(class gpgpu_sim *gpu) : m_gpu(gpu) {}
+
+void page_table_walker::walk(mem_fetch *mf, unsigned long long cycle) {
+    unsigned total_levels = m_gpu->getMemoryConfig()->m_ptw_levels;
+    
+    // 1. 객체 내부의 맵에 현재 Walk 상태 기록
+    m_walk_state[mf] = total_levels;
+    
+    // 2. 패킷 메타데이터 세팅
+    mf->set_ptw(true);
+    mf->set_tlb_miss_va(mf->get_addr());
+    
+    send_to_dram(mf, total_levels, cycle);
+}
+
+bool page_table_walker::process_reply(mem_fetch *mf, unsigned long long cycle) {
+    assert(m_walk_state.find(mf) != m_walk_state.end());
+    unsigned current_level = m_walk_state[mf];
+
+    if (current_level > 1) {
+        // [진행 중] 레벨 1 감소 후 다음 테이블을 향해 DRAM으로 재전송
+        m_walk_state[mf] = current_level - 1;
+        send_to_dram(mf, current_level - 1, cycle);
+        return false;
+    } else {
+        // [완료] 상태 맵에서 삭제하고 원본 주소 복구
+        m_walk_state.erase(mf);
+        mf->set_addr(mf->get_tlb_miss_va());
+        return true;
+    }
+}
+
+void page_table_walker::send_to_dram(mem_fetch *mf, unsigned level, unsigned long long cycle) {
+    // 레벨별로 다른 메모리 주소(다른 뱅크)에 접근하도록 계산
+    new_addr_type pte_addr = mf->get_tlb_miss_va() * 8 + (level * 4096);
+    mf->set_addr(pte_addr);
+
+    addrdec_t tlx;
+    m_gpu->getMemoryConfig()->m_address_mapping.addrdec_tlx(pte_addr, &tlx);
+    mf->set_chip(tlx.chip);
+    mf->set_partition(tlx.sub_partition);
+
+    m_gpu->push_to_memory_partition(tlx.chip, mf, cycle);
 }
 
 /******************************************************************************************************************************************/

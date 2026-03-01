@@ -67,6 +67,7 @@
 #define DUMPLOG 333
 
 class gpgpu_context;
+class page_table_walker;
 
 extern tr1_hash_map<new_addr_type, unsigned> address_random_interleaving;
 
@@ -332,6 +333,7 @@ class memory_config {
   bool m_L2_texure_only;
 
   l2_tlb_config m_l2_tlb_config;
+  unsigned m_ptw_levels;
 
   char *gpgpu_dram_timing_opt;
   char *gpgpu_L2_queue_config;
@@ -679,6 +681,7 @@ class gpgpu_sim : public gpgpu_t {
   // L2 TLB
   shared_l2_tlb* get_l2_tlb() const {return m_l2_tlb; }
   void push_to_memory_partition(unsigned part_id, mem_fetch *mf, unsigned long long cycle);
+  class page_table_walker *get_ptw() const { return m_ptw; }
 
  protected:
   // clocks
@@ -754,6 +757,7 @@ class gpgpu_sim : public gpgpu_t {
                                       // stat printout
   virtual void createSIMTCluster() = 0;
   shared_l2_tlb *m_l2_tlb;
+  class page_table_walker *m_ptw;
 
  public:
   unsigned long long gpu_sim_insn;
