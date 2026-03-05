@@ -159,6 +159,11 @@ dram_t::dram_t(unsigned int partition_id, const memory_config *config,
     mrqq_Dist = StatCreate("mrqq_length", 1, queue_limit());
   else                                             // queue length is unlimited;
     mrqq_Dist = StatCreate("mrqq_length", 1, 64);  // track up to 64 entries
+
+  current_mode = NORMAL_MODE;
+  pending_mode_transition = 0;
+  mode_transition_cycles = 0;
+  IRF.resize(32, 0); // 예: 32개의 Instruction을 담을 수 있는 IRF 공간 할당
 }
 
 bool dram_t::full(bool is_write) const {
@@ -579,8 +584,14 @@ bool dram_t::issue_col_command(int j) {
       else
         n_rd++;
 
-      bwutil += m_config->BL / m_config->data_command_freq_ratio;
-      bwutil_partial += m_config->BL / m_config->data_command_freq_ratio;
+      unsigned current_bw = m_config->BL / m_config->data_command_freq_ratio;
+      if (current_mode == PIM_MODE) {
+          bwutil += current_bw * m_config->nbk;
+          bwutil_partial += current_bw * m_config->nbk;
+      } else {
+          bwutil += current_bw;
+          bwutil_partial += current_bw;
+      }
       bk[j]->n_access++;
 
 #ifdef DRAM_VERIFY
@@ -614,8 +625,14 @@ bool dram_t::issue_col_command(int j) {
           n_wr_WB++;
         else
           n_wr++;
-        bwutil += m_config->BL / m_config->data_command_freq_ratio;
-        bwutil_partial += m_config->BL / m_config->data_command_freq_ratio;
+        unsigned current_bw = m_config->BL / m_config->data_command_freq_ratio;
+        if (current_mode == PIM_MODE) {
+            bwutil += current_bw * m_config->nbk;
+            bwutil_partial += current_bw * m_config->nbk;
+        } else {
+            bwutil += current_bw;
+            bwutil_partial += current_bw;
+        }
 #ifdef DRAM_VERIFY
         PRINT_CYCLE = 1;
         printf(
@@ -642,6 +659,43 @@ bool dram_t::issue_row_command(int j) {
     // else
     if (!issued && !RRDc && (bk[j]->state == BANK_IDLE) && !bk[j]->RPc &&
         !bk[j]->RCc) {  //
+      printf("[DEBUG] access row address %lx\n", bk[j]->mrq->row);
+      if (bk[j]->mrq->row == PIM_ENTER_MRS_ROW) {
+          pending_mode_transition = 1; 
+          printf("[PIM] Partition %d: ACT for PIM ENTER pending (Row: %03x)\n", id, bk[j]->mrq->row);
+      } else if (bk[j]->mrq->row == PIM_EXIT_MRS_ROW) {
+          pending_mode_transition = 2;
+          printf("[PIM] Partition %d: ACT for PIM EXIT pending (Row: %03x)\n", id, bk[j]->mrq->row);
+      } else {
+          pending_mode_transition = 0;
+      }
+
+      if (current_mode == PIM_MODE) {
+          for (unsigned k = 0; k < m_config->nbk; k++) {
+              bk[k]->curr_row = bk[j]->mrq->row;
+              bk[k]->state = BANK_ACTIVE;
+
+              bk[k]->RCDc   = m_config->tACTab + m_config->tRCD;       
+              bk[k]->RCDWRc = m_config->tACTab + m_config->tRCDWR;
+              bk[k]->RASc   = m_config->tACTab + m_config->tRAS;
+              bk[k]->RCc    = m_config->tACTab + m_config->tRC;
+          }
+          
+          RRDc = m_config->tACTab; 
+          
+          n_act_partial += m_config->nbk; 
+          n_act += m_config->nbk;
+          
+          prio = (j + 1) % m_config->nbk;
+          issued = true;
+
+#ifdef DRAM_VERIFY
+          PRINT_CYCLE = 1;
+          printf("\t[PIM] ACTab (All-Bank) Row:%03x Delay:%d \n", 
+                 bk[j]->mrq->row, m_config->tACTab);
+#endif
+      }
+
 #ifdef DRAM_VERIFY
       PRINT_CYCLE = 1;
       printf("\tACT BK:%d NewRow:%03x From:%03x \n", j, bk[j]->mrq->row,
@@ -667,6 +721,18 @@ bool dram_t::issue_row_command(int j) {
           (bk[j]->state == BANK_ACTIVE) &&
           (!bk[j]->RASc && !bk[j]->WTPc && !bk[j]->RTPc &&
            !bkgrp[grp]->RTPLc)) {
+
+        if (pending_mode_transition == 1 && bk[j]->curr_row == PIM_ENTER_MRS_ROW) {
+            current_mode = PIM_MODE;
+            mode_transition_cycles = 10; // tMRS 지연시간 모델링
+            pending_mode_transition = 0;
+            printf("[PIM] Partition %d: PRE completed. Mode Transition NORMAL -> PIM\n", id);
+        } else if (pending_mode_transition == 2 && bk[j]->curr_row == PIM_EXIT_MRS_ROW) {
+            current_mode = NORMAL_MODE;
+            mode_transition_cycles = 10;
+            pending_mode_transition = 0;
+            printf("[PIM] Partition %d: PRE completed. Mode Transition PIM -> NORMAL\n", id);
+        }
         // make the bank idle again
         bk[j]->state = BANK_IDLE;
         bk[j]->RPc = m_config->tRP;

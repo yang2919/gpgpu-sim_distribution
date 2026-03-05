@@ -292,6 +292,11 @@ void memory_config::reg_options(class OptionParser *opp) {
       "DRAM timing parameters = "
       "{nbk:tCCD:tRRD:tRCD:tRAS:tRP:tRC:CL:WL:tCDLR:tWR:nbkgrp:tCCDL:tRTPL}",
       "4:2:8:12:21:13:34:9:4:5:13:1:0:0");
+
+  option_parser_register(opp, "-gpgpu_dram_pim_tactab", OPT_UINT32, &tACTab,
+                "All-Bank Activate Time for PIM mode (default 0)",
+                "128");
+
   option_parser_register(opp, "-gpgpu_l2_rop_latency", OPT_UINT32, &rop_latency,
                          "ROP queue latency (default 85)", "85");
   option_parser_register(opp, "-dram_latency", OPT_UINT32, &dram_latency,
@@ -323,9 +328,11 @@ void memory_config::reg_options(class OptionParser *opp) {
                            "Global L2 TLB config {<nsets>:<bsize>:<assoc>:<wr>:<alloc> | none}",
                            "1:4096:64:L:m");
   option_parser_register(opp, "-gpgpu_l2_tlb_hit_latency", OPT_UINT32, &m_l2_tlb_config.l2_tlb_hit_latency,
-                          "L2 TLB Hit Latency (cycles)", "20");
+                          "L2 TLB Hit Latency (cycles)", "80");
   option_parser_register(opp, "-gpgpu_l2_tlb_miss_latency", OPT_UINT32, &m_l2_tlb_config.l2_tlb_miss_latency,
                           "L2 TLB Miss (PTW) Latency (cycles)", "200");
+  option_parser_register(opp, "-gpgpu_ptw_levels", OPT_UINT32, &m_ptw_levels,
+                           "Number of Page Table Levels for PTW (e.g., 4)", "4");
   // SST mode activate
   option_parser_register(opp, "-SST_mode", OPT_BOOL, &SST_mode, "SST mode",
                          "0");
@@ -1030,8 +1037,10 @@ gpgpu_sim::gpgpu_sim(const gpgpu_sim_config &config, gpgpu_context *ctx)
   gpu_kernel_time.clear();
   if(!m_memory_config->m_l2_tlb_config.disabled()){
     m_l2_tlb = new shared_l2_tlb(m_memory_config->m_l2_tlb_config, this);
+    m_ptw = new page_table_walker(this);
   } else{
     m_l2_tlb = NULL;
+    m_ptw = NULL;
   }
 
   // TODO: somehow move this logic to the sst_gpgpu_sim constructor?

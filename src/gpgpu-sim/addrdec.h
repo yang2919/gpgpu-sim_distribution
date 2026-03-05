@@ -36,13 +36,18 @@
 
 #include "../abstract_hardware_model.h"
 
+#define PIM_MMIO_BASE       0x7FFF0000
+#define PIM_ENTER_VADDR     (PIM_MMIO_BASE + 0x0000)
+#define PIM_EXIT_VADDR      (PIM_MMIO_BASE + 0x1000)
+
 enum partition_index_function {
   CONSECUTIVE = 0,
   BITWISE_PERMUTATION,
   IPOLY,
   PAE,
   RANDOM,
-  CUSTOM
+  CUSTOM,
+  PIM,
 };
 
 struct addrdec_t {

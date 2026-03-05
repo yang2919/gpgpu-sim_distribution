@@ -2259,4 +2259,24 @@ private:
     std::list<std::pair<mem_fetch*, unsigned long long>> m_lookup_queue;
 };
 
+class page_table_walker {
+public:
+    page_table_walker(class gpgpu_sim *gpu);
+    
+    // L2 TLB Miss 발생 시 호출 (새로운 Walk 시작)
+    void walk(mem_fetch *mf, unsigned long long cycle);
+    
+    // DRAM에서 응답 도착 시 호출 (진행 상태 업데이트)
+    // 반환값: 탐색이 모두 끝났으면 true, 다음 레벨 진행 중이면 false
+    bool process_reply(mem_fetch *mf, unsigned long long cycle);
+
+private:
+    class gpgpu_sim *m_gpu;
+    
+    // [핵심] 패킷(mf)별로 현재 탐색 중인 레벨을 추적하는 상태 맵
+    std::map<mem_fetch*, unsigned> m_walk_state; 
+    
+    void send_to_dram(mem_fetch *mf, unsigned level, unsigned long long cycle);
+};
+
 #endif

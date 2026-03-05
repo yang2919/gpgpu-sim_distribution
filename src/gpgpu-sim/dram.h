@@ -50,6 +50,12 @@
 #define BANK_IDLE 'I'
 #define BANK_ACTIVE 'A'
 
+#define NORMAL_MODE 0
+#define PIM_MODE 1
+
+#define PIM_ENTER_MRS_ROW 0x27FF 
+#define PIM_EXIT_MRS_ROW  0x2FFF
+
 class dram_req_t {
  public:
   dram_req_t(class mem_fetch *data, unsigned banks,
@@ -141,6 +147,11 @@ class dram_t {
                             unsigned &wr, unsigned &wr_WB, unsigned &req) const;
 
   const memory_config *m_config;
+
+  unsigned char current_mode;          // 현재 메모리 모드 (NORMAL_MODE or PIM_MODE)
+  unsigned char pending_mode_transition; // 0: None, 1: Enter PIM Pending, 2: Exit PIM Pending
+  unsigned int mode_transition_cycles; // tMRS (Mode Register Set) 등 전환 딜레이를 위한 카운터
+  std::vector<uint32_t> IRF;           // PIM 명령어를 담을 Instruction Register File
 
  private:
   bankgrp_t **bkgrp;

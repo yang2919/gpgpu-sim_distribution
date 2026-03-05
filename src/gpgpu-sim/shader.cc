@@ -2442,17 +2442,22 @@ void ldst_unit::fill(mem_fetch *mf) {
   if (mf->is_ptw()) {
         unsigned long long current_cycle = m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle;
         
-        mf->set_addr(mf->get_tlb_miss_va());
-
-        m_gpu->get_l2_tlb()->fill(mf, current_cycle);
-        m_tlb->fill(mf, current_cycle);
-
-        unsigned long long turnaround = current_cycle - mf->get_tlb_miss_start_time();
-        printf("[TLB TIMING] SM %u | VA: 0x%llx | DRAM PTW   | Turnaround: %llu cycles\n", 
-               m_sid, mf->get_tlb_miss_va(), turnaround);
-        m_pending_tlb_requests.erase(mf->get_tlb_miss_va());
+        // 워커에게 응답 처리를 맡기고 완료 여부 확인
+        bool is_done = m_gpu->get_ptw()->process_reply(mf, current_cycle);
         
-        delete mf;
+        if (is_done) {
+            // 완전히 끝났을 때만 TLB 갱신 수행
+            m_gpu->get_l2_tlb()->fill(mf, current_cycle);
+            m_tlb->fill(mf, current_cycle);
+            
+            unsigned long long turnaround = current_cycle - mf->get_tlb_miss_start_time();
+            unsigned total_levels = m_gpu->getMemoryConfig()->m_ptw_levels;
+            printf("[TLB TIMING] SM %u | VA: 0x%llx | %u-Level PTW Done | Turnaround: %llu cycles\n", 
+                   m_sid, mf->get_tlb_miss_va(), total_levels, turnaround);
+            
+            m_pending_tlb_requests.erase(mf->get_addr());
+            delete mf; 
+        }
         return;
   }
   else{
@@ -3012,7 +3017,7 @@ void ldst_unit::cycle() {
                                       // on load miss only
 
         bool bypassL1D = false;
-        if (CACHE_GLOBAL == mf->get_inst().cache_op || (m_L1D == NULL)) {
+        if (CACHE_GLOBAL == mf->get_inst().cache_op || CACHE_STREAMING == mf->get_inst().cache_op || (m_L1D == NULL) ) {
           bypassL1D = true;
         } else if (mf->get_access_type() == GLOBAL_ACC_R ||
                    mf->get_access_type() ==
@@ -4815,6 +4820,10 @@ void simt_core_cluster::icnt_inject_request_packet(class mem_fetch *mf) {
   // - For write request and atomic request, the packet contains the data
   // - For read request (i.e. not write nor atomic), the packet only has control
   // metadata
+  if (mf->get_inst().cache_op == CACHE_STREAMING) {
+      printf("[DEBUG-CLUSTER] Cluster %d injecting packet to ICNT. Addr: 0x%llX, is_write: %d, cache_op: %d\n", 
+              m_cluster_id, mf->get_addr(), mf->is_write(), mf->get_inst().cache_op);
+  } 
   unsigned int packet_size = mf->size();
   if (!mf->get_is_write() && !mf->isatomic()) {
     packet_size = mf->get_ctrl_size();
