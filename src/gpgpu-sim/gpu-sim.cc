@@ -292,6 +292,11 @@ void memory_config::reg_options(class OptionParser *opp) {
       "DRAM timing parameters = "
       "{nbk:tCCD:tRRD:tRCD:tRAS:tRP:tRC:CL:WL:tCDLR:tWR:nbkgrp:tCCDL:tRTPL}",
       "4:2:8:12:21:13:34:9:4:5:13:1:0:0");
+
+  option_parser_register(opp, "-gpgpu_dram_pim_tactab", OPT_UINT32, &tACTab,
+                "All-Bank Activate Time for PIM mode (default 0)",
+                "128");
+
   option_parser_register(opp, "-gpgpu_l2_rop_latency", OPT_UINT32, &rop_latency,
                          "ROP queue latency (default 85)", "85");
   option_parser_register(opp, "-dram_latency", OPT_UINT32, &dram_latency,

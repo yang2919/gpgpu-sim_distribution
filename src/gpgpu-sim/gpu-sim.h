@@ -379,6 +379,8 @@ class memory_config {
   unsigned tWTP;  // time to switch from write to precharge in the same bank
   unsigned busW;
 
+  unsigned tACTab;
+
   unsigned nbkgrp;  // number of bank groups (has to be power of 2)
   unsigned
       bk_tag_length;  // number of bits that define a bank inside a bank group

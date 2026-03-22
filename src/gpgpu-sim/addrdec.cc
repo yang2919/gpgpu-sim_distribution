@@ -71,7 +71,7 @@ void linear_to_raw_address_translation::addrdec_setoption(option_parser_t opp) {
   option_parser_register(
       opp, "-gpgpu_memory_partition_indexing", OPT_UINT32,
       &memory_partition_indexing,
-      "0 = no indexing, 1 = bitwise xoring, 2 = IPoly, 3 = custom indexing",
+      "0 = no indexing, 1 = bitwise xoring, 2 = IPoly, 3 = custom indexing, 4 = PIM",
       "0");
 }
 
@@ -188,6 +188,45 @@ void linear_to_raw_address_translation::addrdec_tlx(new_addr_type addr,
       /* No custom set function implemented */
       // Do you custom index here
       break;
+    case PIM: {
+      if (addr == PIM_ENTER_VADDR) {
+          tlx->chip = 0;       
+          tlx->bk   = 0;       
+          tlx->row  = 0x27FF;  
+          tlx->col  = 0;
+          tlx->burst = 0;
+          tlx->sub_partition = 0;
+          return; 
+      } 
+      else if (addr == PIM_EXIT_VADDR) {
+          tlx->chip = 0;
+          tlx->bk   = 0;
+          tlx->row  = 0x2FFF;  
+          tlx->col  = 0;
+          tlx->burst = 0;
+          tlx->sub_partition = 0;
+          return; 
+      }
+      new_addr_type chip_address = (addr >> (ADDR_CHIP_S - log2sub_partition));
+      tr1_hash_map<new_addr_type, unsigned>::const_iterator got =
+          address_random_interleaving.find(chip_address);
+      if (got == address_random_interleaving.end()) {
+        unsigned new_chip_id =
+            rand() % (m_n_channel * m_n_sub_partition_in_channel);
+        address_random_interleaving[chip_address] = new_chip_id;
+        tlx->chip = new_chip_id / m_n_sub_partition_in_channel;
+        tlx->sub_partition = new_chip_id;
+      } else {
+        unsigned new_chip_id = got->second;
+        tlx->chip = new_chip_id / m_n_sub_partition_in_channel;
+        tlx->sub_partition = new_chip_id;
+      }
+      assert(tlx->chip < m_n_channel);
+      assert(tlx->sub_partition < m_n_channel * m_n_sub_partition_in_channel);
+      return;
+      break;
+    }
+  
     default:
       assert("\nUndefined set index function.\n" && 0);
       break;

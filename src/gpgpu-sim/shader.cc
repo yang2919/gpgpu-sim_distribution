@@ -3017,7 +3017,7 @@ void ldst_unit::cycle() {
                                       // on load miss only
 
         bool bypassL1D = false;
-        if (CACHE_GLOBAL == mf->get_inst().cache_op || (m_L1D == NULL)) {
+        if (CACHE_GLOBAL == mf->get_inst().cache_op || CACHE_STREAMING == mf->get_inst().cache_op || (m_L1D == NULL) ) {
           bypassL1D = true;
         } else if (mf->get_access_type() == GLOBAL_ACC_R ||
                    mf->get_access_type() ==
@@ -4820,6 +4820,10 @@ void simt_core_cluster::icnt_inject_request_packet(class mem_fetch *mf) {
   // - For write request and atomic request, the packet contains the data
   // - For read request (i.e. not write nor atomic), the packet only has control
   // metadata
+  if (mf->get_inst().cache_op == CACHE_STREAMING) {
+      printf("[DEBUG-CLUSTER] Cluster %d injecting packet to ICNT. Addr: 0x%llX, is_write: %d, cache_op: %d\n", 
+              m_cluster_id, mf->get_addr(), mf->is_write(), mf->get_inst().cache_op);
+  } 
   unsigned int packet_size = mf->size();
   if (!mf->get_is_write() && !mf->isatomic()) {
     packet_size = mf->get_ctrl_size();
