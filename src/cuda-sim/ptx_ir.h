@@ -482,7 +482,7 @@ class operand_info {
     m_is_return_var = false;
     m_immediate_address = false;
   }
-  operand_info(const symbol *addr, int offset, gpgpu_context *ctx) {
+  operand_info(const symbol *addr, long long offset, gpgpu_context *ctx) {
     init(ctx);
     m_is_non_arch_reg = false;
     m_addr_space = undefined_space;
@@ -500,7 +500,7 @@ class operand_info {
     m_is_return_var = false;
     m_immediate_address = false;
   }
-  operand_info(unsigned x, gpgpu_context *ctx) {
+  operand_info(long long x, gpgpu_context *ctx) {
     init(ctx);
     m_is_non_arch_reg = false;
     m_addr_space = undefined_space;
@@ -512,7 +512,7 @@ class operand_info {
     m_valid = true;
     m_vector = false;
     m_type = unsigned_t;
-    m_value.m_unsigned = x;
+    m_value.m_uint64 = x;
     m_addr_offset = x;
     m_neg_pred = false;
     m_is_return_var = false;
@@ -809,7 +809,7 @@ class operand_info {
     ptx_reg_t result;
     switch (m_type) {
       case int_t:
-        result.s64 = m_value.m_int;
+        result.s64 = m_value.m_uint64;
         break;
       case float_op_t:
         result.f32 = m_value.m_float;
@@ -818,7 +818,7 @@ class operand_info {
         result.f64 = m_value.m_double;
         break;
       case unsigned_t:
-        result.u32 = m_value.m_unsigned;
+        result.u32 = m_value.m_uint64;
         break;
       default:
         assert(0);
@@ -826,8 +826,8 @@ class operand_info {
     }
     return result;
   }
-  int get_int() const { return m_value.m_int; }
-  int get_addr_offset() const { return m_addr_offset; }
+  long long get_int() const { return m_value.m_uint64; }
+  long long get_addr_offset() const { return m_addr_offset; }
   const symbol *get_symbol() const { return m_value.m_symbolic; }
   void set_type(enum operand_type type) { m_type = type; }
   enum operand_type get_type() const { return m_type; }
@@ -877,11 +877,12 @@ class operand_info {
     unsigned int m_vunsigned[4];
     float m_vfloat[4];
     double m_vdouble[4];
+    long long m_uint64;
     const symbol *m_symbolic;
     const symbol **m_vector_symbolic;
   } m_value;
 
-  int m_addr_offset;
+  long long m_addr_offset;
 
   bool m_neg_pred;
   bool m_is_return_var;

@@ -910,7 +910,7 @@ void ptx_recognizer::add_neg_pred_operand(const char *identifier) {
   g_operands.push_back(op);
 }
 
-void ptx_recognizer::add_address_operand(const char *identifier, int offset) {
+void ptx_recognizer::add_address_operand(const char *identifier, long long offset) {
   PTX_PARSE_DPRINTF("add_address_operand");
   const symbol *s = g_current_symbol_table->lookup(identifier);
   if (s == NULL) {
@@ -921,9 +921,9 @@ void ptx_recognizer::add_address_operand(const char *identifier, int offset) {
   g_operands.push_back(operand_info(s, offset, gpgpu_ctx));
 }
 
-void ptx_recognizer::add_address_operand2(int offset) {
+void ptx_recognizer::add_address_operand2(long long offset) {
   PTX_PARSE_DPRINTF("add_address_operand");
-  g_operands.push_back(operand_info((unsigned)offset, gpgpu_ctx));
+  g_operands.push_back(operand_info(offset, gpgpu_ctx));
 }
 
 void ptx_recognizer::add_array_initializer() {
