@@ -2278,7 +2278,7 @@ bool ldst_unit::memory_cycle(warp_inst_t &inst,
   const mem_access_t &access = inst.accessq_back();
 
   bool bypassL1D = false;
-  if (CACHE_GLOBAL == inst.cache_op || (m_L1D == NULL)) {
+  if (CACHE_GLOBAL == inst.cache_op || CACHE_STREAMING == inst.cache_op || (m_L1D == NULL)) {
     bypassL1D = true;
   } else if (inst.space.is_global()) {  // global memory access
     // skip L1 cache if the option is enabled
@@ -2336,6 +2336,11 @@ bool ldst_unit::memory_cycle(warp_inst_t &inst,
 bool ldst_unit::tlb_cycle(warp_inst_t &inst, mem_stage_stall_type &stall_reason, mem_stage_access_type &access_type)
 {
     //warp_inst_t *to_print = &inst;
+    if (inst.empty() || ((inst.space.get_type() != global_space) &&
+                         (inst.space.get_type() != local_space) &&
+                         (inst.space.get_type() != param_space_local))) {
+        return true;
+    }
     mem_stage_stall_type result = NO_RC_FAIL;
     bool iswrite = inst.is_store();
     if (inst.space.is_local())
@@ -2343,9 +2348,17 @@ bool ldst_unit::tlb_cycle(warp_inst_t &inst, mem_stage_stall_type &stall_reason,
     else
       access_type = (iswrite) ? G_MEM_ST : G_MEM_LD;
     
-    if (inst.accessq_empty())
+    if (inst.accessq_empty()) {
+        unsigned wid = inst.warp_id();
+        auto it = std::find_if(tlb_lookup_queue.begin(), tlb_lookup_queue.end(),
+                               [wid](const std::pair<unsigned, unsigned>& element) {
+                                    return element.first == wid;
+                               });
+        if (it != tlb_lookup_queue.end()) {
+            tlb_lookup_queue.erase(it);
+        }
         return true;
-
+    }
     unsigned wid = inst.warp_id();
     auto it = std::find_if(tlb_lookup_queue.begin(), tlb_lookup_queue.end(),
                            [wid](const std::pair<unsigned, unsigned>& element) {
@@ -2373,26 +2386,32 @@ bool ldst_unit::tlb_cycle(warp_inst_t &inst, mem_stage_stall_type &stall_reason,
         delete mf; 
         return 0; 
     }
+    new_addr_type miss_addr = mf->get_addr();
+    
+    if (m_pending_tlb_requests.find(miss_addr) != m_pending_tlb_requests.end()) {
+        stall_reason = COAL_STALL;
+        delete mf;
+        return false;
+    }
+
     enum cache_request_status status = m_tlb->access(mf->get_addr(), mf, m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle, events);
     if (status == MISS)
     {
-        // ----------------------Deprecated TLB----------------------------------------
-        // if ((tlb_latency_queue[m_config->m_tlb_config.tlb_latency - 1]) == NULL)
-        // {
-        //     //fprintf(stdout, "Inserting mf in tlb called");
-        //     tlb_latency_queue[m_config->m_tlb_config.tlb_latency - 1] = mf;
-        // }
-        // -----------------------------------------------------------------------------
-        new_addr_type miss_addr = mf->get_addr();
-
-        if (m_pending_tlb_requests.find(miss_addr) == m_pending_tlb_requests.end()) {
-            mem_fetch *l2_req_mf = m_mf_allocator->alloc(inst, inst.accessq_back(), m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
-            l2_req_mf->set_addr(miss_addr);
-            l2_req_mf->set_tlb_miss_start_time(m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
-            m_gpu->get_l2_tlb()->push_request(l2_req_mf);
-
-            m_pending_tlb_requests.insert(miss_addr);
+        unsigned long long current_cycle = m_gpu->gpu_tot_sim_cycle + m_gpu->gpu_sim_cycle;
+        if (m_stats->m_last_tlb_miss_cycle[m_sid] != 0) {
+            unsigned long long interval = current_cycle - m_stats->m_last_tlb_miss_cycle[m_sid];
+            m_stats->m_sum_tlb_miss_interval[m_sid] += interval;
+            m_stats->m_tlb_miss_interval_count[m_sid]++;
         }
+        m_stats->m_last_tlb_miss_cycle[m_sid] = current_cycle;
+
+
+        mem_fetch *l2_req_mf = m_mf_allocator->alloc(inst, inst.accessq_back(), m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
+        l2_req_mf->set_addr(miss_addr);
+        l2_req_mf->set_tlb_miss_start_time(m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
+        m_gpu->get_l2_tlb()->push_request(l2_req_mf);
+
+        m_pending_tlb_requests.insert(miss_addr);
         delete mf;
 
         stall_reason = COAL_STALL;
@@ -2409,7 +2428,7 @@ bool ldst_unit::tlb_cycle(warp_inst_t &inst, mem_stage_stall_type &stall_reason,
     }
     else
     {
-        tlb_lookup_queue.erase(it);
+        // tlb_lookup_queue.erase(it);
         return 1;
     }
 }
@@ -2426,8 +2445,7 @@ void ldst_unit::process_tlb_responses() {
       m_tlb->fill(mf, current_cycle);
 
       unsigned long long turnaround = current_cycle - mf->get_tlb_miss_start_time();
-      printf("[TLB TIMING] SM %u | VA: 0x%llx | L2 TLB HIT | Turnaround: %llu cycles\n", 
-              m_sid, mf->get_addr(), turnaround);
+      // printf("[TLB TIMING] SM %u | VA: 0x%llx | L2 TLB HIT | Turnaround: %llu cycles\n", m_sid, mf->get_addr(), turnaround); 
 
       m_pending_tlb_requests.erase(mf->get_addr());
       delete mf; 
@@ -2452,9 +2470,9 @@ void ldst_unit::fill(mem_fetch *mf) {
             
             unsigned long long turnaround = current_cycle - mf->get_tlb_miss_start_time();
             unsigned total_levels = m_gpu->getMemoryConfig()->m_ptw_levels;
-            printf("[TLB TIMING] SM %u | VA: 0x%llx | %u-Level PTW Done | Turnaround: %llu cycles\n", 
-                   m_sid, mf->get_tlb_miss_va(), total_levels, turnaround);
-            
+            // printf("[TLB TIMING] SM %u | VA: 0x%llx | %u-Level PTW Done | Turnaround: %llu cycles\n", 
+            //        m_sid, mf->get_tlb_miss_va(), total_levels, turnaround);
+            if(m_sid == 0) printf("SM[%02u] PTW Completed (TLB Filled) at cycle: %llu\n", m_sid, current_cycle);
             m_pending_tlb_requests.erase(mf->get_addr());
             delete mf; 
         }
@@ -3384,6 +3402,45 @@ void gpgpu_sim::shader_print_cache_stats(FILE *fout) const {
               total_css.pending_hits);
       fprintf(fout, "\tTLB_total_reservation_fails = %llu\n",
               total_css.res_fails);
+
+      fprintf(fout, "\n========= Per-SM L1 TLB Stats =========\n");
+        
+        struct cache_sub_stats core_tlb_css;
+        unsigned total_sms = m_shader_config->n_simt_clusters * m_shader_config->n_simt_cores_per_cluster;
+        
+        // 각 클러스터와 코어를 순회
+        for (unsigned i = 0; i < m_shader_config->n_simt_clusters; i++) {
+            for (unsigned j = 0; j < m_shader_config->n_simt_cores_per_cluster; j++) {
+                
+                // 1. 해당 SM(Core)의 TLB 통계 가져오기
+                core_tlb_css.clear();
+                m_cluster[i]->get_core(j)->get_TLB_sub_stats(core_tlb_css);
+                
+                // 2. 해당 SM(Core)이 실행한 총 명령어 수 가져오기 
+                // (GPGPU-Sim 버전이나 설정에 따라 m_stats->m_num_sim_insn[sid] 등의 변수 사용)
+                unsigned sid = m_cluster[i]->get_core(j)->get_sid();
+                unsigned long long core_instructions = m_shader_stats->m_num_sim_insn[sid]; 
+                
+                // 3. 해당 SM의 MPKI 계산
+                double core_tlb_mpki = 0.0;
+                if (core_instructions > 0) {
+                    core_tlb_mpki = ((double)core_tlb_css.misses / (double)core_instructions) * 1000.0;
+                }
+
+                // 4. SM별 결과 출력
+                fprintf(fout, "SM[%02u] (Cluster %u, Core %u):\n", sid, i, j);
+                fprintf(fout, "\tInstructions = %llu\n", core_instructions);
+                fprintf(fout, "\tL1_TLB_Accesses = %llu\n", core_tlb_css.accesses);
+                fprintf(fout, "\tL1_TLB_Misses = %llu\n", core_tlb_css.misses);
+                
+                if (core_tlb_css.accesses > 0) {
+                    fprintf(fout, "\tL1_TLB_Miss_Rate = %.4lf\n", 
+                            (double)core_tlb_css.misses / (double)core_tlb_css.accesses);
+                }
+                fprintf(fout, "\tL1_TLB_MPKI = %.4lf\n", core_tlb_mpki);
+            }
+        }
+        fprintf(fout, "=======================================\n");
   }
 }
 
@@ -4820,10 +4877,10 @@ void simt_core_cluster::icnt_inject_request_packet(class mem_fetch *mf) {
   // - For write request and atomic request, the packet contains the data
   // - For read request (i.e. not write nor atomic), the packet only has control
   // metadata
-  if (mf->get_inst().cache_op == CACHE_STREAMING) {
-      printf("[DEBUG-CLUSTER] Cluster %d injecting packet to ICNT. Addr: 0x%llX, is_write: %d, cache_op: %d\n", 
-              m_cluster_id, mf->get_addr(), mf->is_write(), mf->get_inst().cache_op);
-  } 
+  // if (mf->get_inst().cache_op == CACHE_STREAMING) {
+  //     printf("[DEBUG-CLUSTER] Cluster %d injecting packet to ICNT. Addr: 0x%llX, is_write: %d, cache_op: %d\n", 
+  //             m_cluster_id, mf->get_addr(), mf->is_write(), mf->get_inst().cache_op);
+  // } 
   unsigned int packet_size = mf->size();
   if (!mf->get_is_write() && !mf->isatomic()) {
     packet_size = mf->get_ctrl_size();

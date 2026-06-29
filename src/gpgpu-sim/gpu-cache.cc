@@ -2388,6 +2388,7 @@ void shared_l2_tlb::cycle() {
             // Lookup Latency 시간이 다 된 요청 처리
             mem_fetch *mf = it->first;
             std::list<cache_event> events;
+            m_l2_tlb_accesses++;
             
             enum cache_request_status status = m_tlb->access(mf->get_addr(), current_cycle, mf);
             if (status == HIT) {
@@ -2395,6 +2396,7 @@ void shared_l2_tlb::cycle() {
                 m_response_queue[mf->get_sid()].push_back(mf);
             } 
             else if (status == MISS || status == HIT_RESERVED) {
+                if (status == MISS) m_l2_tlb_misses++;
                 m_gpu->get_ptw()->walk(mf, current_cycle);
             }
             
@@ -2441,14 +2443,18 @@ bool page_table_walker::process_reply(mem_fetch *mf, unsigned long long cycle) {
 }
 
 void page_table_walker::send_to_dram(mem_fetch *mf, unsigned level, unsigned long long cycle) {
-    // 레벨별로 다른 메모리 주소(다른 뱅크)에 접근하도록 계산
-    new_addr_type pte_addr = mf->get_tlb_miss_va() * 8 + (level * 4096);
-    mf->set_addr(pte_addr);
+    const unsigned PTW_RESERVED_ROW = 0xFE; 
+    new_addr_type ptw_base_addr = (new_addr_type)PTW_RESERVED_ROW << 20;
+    new_addr_type pte_offset = ((mf->get_tlb_miss_va() >> 12) * 8 + (level * 64)) & 0xFFFFF;
 
+    new_addr_type pte_addr = ptw_base_addr | pte_offset;
+    mf->set_addr(pte_addr);
     addrdec_t tlx;
     m_gpu->getMemoryConfig()->m_address_mapping.addrdec_tlx(pte_addr, &tlx);
     mf->set_chip(tlx.chip);
     mf->set_partition(tlx.sub_partition);
+
+    mf->set_tlx_addr(tlx);
 
     m_gpu->push_to_memory_partition(tlx.chip, mf, cycle);
 }

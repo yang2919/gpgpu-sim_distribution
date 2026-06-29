@@ -295,7 +295,7 @@ void memory_config::reg_options(class OptionParser *opp) {
 
   option_parser_register(opp, "-gpgpu_dram_pim_tactab", OPT_UINT32, &tACTab,
                 "All-Bank Activate Time for PIM mode (default 0)",
-                "128");
+                "57");
 
   option_parser_register(opp, "-gpgpu_l2_rop_latency", OPT_UINT32, &rop_latency,
                          "ROP queue latency (default 85)", "85");
@@ -330,7 +330,7 @@ void memory_config::reg_options(class OptionParser *opp) {
   option_parser_register(opp, "-gpgpu_l2_tlb_hit_latency", OPT_UINT32, &m_l2_tlb_config.l2_tlb_hit_latency,
                           "L2 TLB Hit Latency (cycles)", "80");
   option_parser_register(opp, "-gpgpu_l2_tlb_miss_latency", OPT_UINT32, &m_l2_tlb_config.l2_tlb_miss_latency,
-                          "L2 TLB Miss (PTW) Latency (cycles)", "200");
+                          "L2 TLB Miss (PTW) Latency (cycles)", "50");
   option_parser_register(opp, "-gpgpu_ptw_levels", OPT_UINT32, &m_ptw_levels,
                            "Number of Page Table Levels for PTW (e.g., 4)", "4");
   // SST mode activate
@@ -1546,6 +1546,7 @@ void gpgpu_sim::gpu_print_stat(unsigned long long streamID) {
 
   // shader_print_l1_miss_stat( stdout );
   shader_print_cache_stats(stdout);
+  m_l2_tlb->print_l2_tlb_stats();
 
   cache_stats core_cache_stats;
   core_cache_stats.clear();

@@ -164,6 +164,63 @@ dram_t::dram_t(unsigned int partition_id, const memory_config *config,
   pending_mode_transition = 0;
   mode_transition_cycles = 0;
   IRF.resize(32, 0); // 예: 32개의 Instruction을 담을 수 있는 IRF 공간 할당
+
+  n_pim_cycles = 0;
+  n_pim_transition_cycles = 0;
+
+  n_pim_rd = 0;
+  n_pim_wr = 0;
+
+  pim_bwutil = 0;
+
+  n_pim_act_cycles = 0;
+  n_pim_pre_cycles = 0;
+
+  n_pim_actab = 0;
+
+  pim_last_act_row = 0;
+  pim_has_last_act = false;
+
+  rph_predicted_row = 0;
+  rph_predicted_valid = false;
+  rph_enable_counter = 0;
+
+  unsigned int MAX_ROW_INDEX = 0xcFFF;
+
+  for (unsigned int r = 0; r < MAX_ROW_INDEX; r++) {
+      RHT[r].valid = true;
+      RHT[r].target_row = r + 1; // 바로 다음 Row를 타겟으로 지정
+  }
+  
+  // (안전장치) 마지막 Row 도달 시 0번 Row로 Wrap-around 처리
+  RHT[MAX_ROW_INDEX].valid = true;
+  RHT[MAX_ROW_INDEX].target_row = 0;
+
+  // FILE *rht_file = fopen("rht_init.txt", "r");
+  // if (rht_file != NULL) {
+  //     unsigned int src_row, tgt_row;
+  //     char line[128];
+      
+  //     while (fgets(line, sizeof(line), rht_file)) {
+  //         // 주석(#)이거나 빈 줄은 건너뜀
+  //         if (line[0] == '#' || line[0] == '\n') continue;
+          
+  //         if (sscanf(line, "%x %x", &src_row, &tgt_row) == 2) {
+  //             RHT[src_row].valid = true;
+  //             RHT[src_row].target_row = tgt_row;
+  //         }
+  //     }
+  //     fclose(rht_file);
+      
+  //     // 디버그용 출력 (파티션 0번에서만 출력하여 로그 도배 방지)
+  //     if (id == 0) {
+  //         printf("[RHT] Pre-loaded %lu entries from rht_init.txt\n", RHT.size());
+  //     }
+  // } else {
+  //     if (id == 0) {
+  //         printf("[RHT] rht_init.txt not found. Starting with empty RHT.\n");
+  //     }
+  // }
 }
 
 bool dram_t::full(bool is_write) const {
@@ -259,6 +316,82 @@ void dram_t::push(class mem_fetch *data) {
 
   data->set_status(IN_PARTITION_MC_INTERFACE_QUEUE,
                    m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
+  // if(id == 32){
+  //   unsigned long long current_cycle = m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle;
+  //   printf("[MC-RECV] Cycle: %llu | Partition_ID: %d | Type: %s | Addr: 0x%llx | Bank: %d | Row: 0x%03x | Col: 0x%03x | Bytes: %d\n",
+  //         current_cycle,            
+  //         id,                        
+  //         mrq->rw == READ ? "RD" : "WR",
+  //         mrq->addr,               
+  //         mrq->bk,           
+  //         mrq->row,           
+  //         mrq->col,           
+  //         mrq->nbytes);
+  // }
+  // if (current_mode == PIM_MODE) {
+  //     unsigned int raw_bk = mrq->bk;
+
+  //     bool enable_signal = (raw_bk & 0x1) != 0; // Bit 0
+  //     bool update_signal = (raw_bk & 0x2) != 0; // Bit 1
+
+  //     unsigned int currently_open_row = bk[raw_bk]->curr_row;
+
+  //     if (update_signal) {
+  //         if (RHT[currently_open_row].valid) {
+  //             rph_predicted_row = RHT[currently_open_row].target_row;
+  //             rph_predicted_valid = true;
+              
+  //             // if(id == 32)
+  //             //   printf("[PIM-RPH] Update: Open Row 0x%03x -> Predicted Row 0x%03x\n", currently_open_row, rph_predicted_row);
+  //         } else {
+  //             rph_predicted_valid = false; 
+
+  //             // if(id == 32)
+  //             //   printf("[PIM-RPH] Update Failed: Open Row 0x%03x not found in RHT.\n", currently_open_row);
+  //         }
+  //     }
+
+  //     if (enable_signal) {
+  //         if (rph_predicted_valid) {
+  //             // if(id == 32)  
+  //             //   printf("[PIM-RPH] Enable: Redirecting mrq->row from 0x%03x to 0x%03x\n", currently_open_row, rph_predicted_row);
+                      
+  //             mrq->row = rph_predicted_row;
+  //             mrq->bk = 0;
+  //         } else {
+  //           // if(id == 32)
+  //           //   printf("[PIM-RPH] Enable Failed: No valid predicted row for Open Row 0x%03x. Using current row.\n", currently_open_row);
+  //         }
+  //     }
+  //   }
+    if (current_mode == PIM_MODE) {
+        unsigned int raw_bk = data->get_tlx_addr().bk;
+        bool enable_signal = (raw_bk & 0x1) != 0; // Bit 0
+
+        if (enable_signal) {
+            if (rph_enable_counter % 32 == 0) {
+                if (RHT.count(rph_predicted_row) && RHT[rph_predicted_row].valid) {
+                    rph_predicted_row = RHT[rph_predicted_row].target_row;
+                    rph_predicted_valid = true;
+                    if(id == 32)
+                      printf("[PIM-RPH] Enable: Predicted Row 0x%03x\n", rph_predicted_row);
+                } else {
+                    rph_predicted_valid = false; 
+                    printf("[PIM-RPH] Enable Failed: No valid predicted row. Using current row.\n");
+                }
+            }
+
+            if (rph_predicted_valid) {
+                mrq->row = rph_predicted_row;
+                mrq->bk = 0;
+            }
+            rph_enable_counter++;
+            if (rph_enable_counter >= 32) {
+                rph_enable_counter = 0;
+            }
+        }
+    }
+
   mrqq->push(mrq);
 
   // stats...
@@ -322,6 +455,24 @@ void dram_t::cycle() {
     }
   }
 
+  if (mode_transition_cycles){
+    mode_transition_cycles--;
+    n_pim_transition_cycles++;
+  } else{
+    if (current_mode == PIM_MODE && !pending_mode_transition) {
+      n_pim_cycles++;
+      bool act_in_progress = false;
+      bool pre_in_progress = false;
+      
+      for (unsigned j = 0; j < m_config->nbk; j++) {
+          if (bk[j]->RCDc > 0) act_in_progress = true; // tRCD(또는 tACTab) 지연 대기 중
+          if (bk[j]->RPc > 0) pre_in_progress = true;  // tRP 지연 대기 중
+      }
+      
+      if (act_in_progress) n_pim_act_cycles++;
+      if (pre_in_progress) n_pim_pre_cycles++;
+    }
+  }
   /* check if the upcoming request is on an idle bank */
   /* Should we modify this so that multiple requests are checked? */
 
@@ -574,10 +725,22 @@ bool dram_t::issue_col_command(int j) {
       rwq->push(bk[j]->mrq);
       bk[j]->mrq->txbytes += m_config->dram_atom_size;
       CCDc = m_config->tCCD;
-      bkgrp[grp]->CCDLc = m_config->tCCDL;
       RTWc = m_config->tRTW;
-      bk[j]->RTPc = m_config->BL / m_config->data_command_freq_ratio;
-      bkgrp[grp]->RTPLc = m_config->tRTPL;
+
+      if (current_mode == PIM_MODE) {
+          for (unsigned g = 0; g < m_config->nbkgrp; g++) {
+              bkgrp[g]->CCDLc = m_config->tCCDL;
+              bkgrp[g]->RTPLc = m_config->tRTPL;
+          }
+          for (unsigned k = 0; k < m_config->nbk; k++) {
+              bk[k]->RTPc = m_config->BL / m_config->data_command_freq_ratio;
+          }
+      } else {
+          bkgrp[grp]->CCDLc = m_config->tCCDL;
+          bkgrp[grp]->RTPLc = m_config->tRTPL;
+          bk[j]->RTPc = m_config->BL / m_config->data_command_freq_ratio;
+      }
+
       issued = true;
       if (bk[j]->mrq->data->get_access_type() == L2_WR_ALLOC_R)
         n_rd_L2_A++;
@@ -586,8 +749,8 @@ bool dram_t::issue_col_command(int j) {
 
       unsigned current_bw = m_config->BL / m_config->data_command_freq_ratio;
       if (current_mode == PIM_MODE) {
-          bwutil += current_bw * m_config->nbk;
-          bwutil_partial += current_bw * m_config->nbk;
+          pim_bwutil += current_bw * m_config->nbk;
+          n_pim_rd++;
       } else {
           bwutil += current_bw;
           bwutil_partial += current_bw;
@@ -613,12 +776,24 @@ bool dram_t::issue_col_command(int j) {
           rwq->set_min_length(m_config->WL);
         }
         rwq->push(bk[j]->mrq);
-
+        
         bk[j]->mrq->txbytes += m_config->dram_atom_size;
         CCDc = m_config->tCCD;
-        bkgrp[grp]->CCDLc = m_config->tCCDL;
+        // bkgrp[grp]->CCDLc = m_config->tCCDL;
         WTRc = m_config->tWTR;
-        bk[j]->WTPc = m_config->tWTP;
+        // bk[j]->WTPc = m_config->tWTP;
+
+        if (current_mode == PIM_MODE) {
+            for (unsigned g = 0; g < m_config->nbkgrp; g++) {
+                bkgrp[g]->CCDLc = m_config->tCCDL;
+            }
+            for (unsigned k = 0; k < m_config->nbk; k++) {
+                bk[k]->WTPc = m_config->tRTPL; // in PIM_MODE, WTPc is set to tRTPL to allow for faster writeback after PIM operations
+            }
+        } else {
+            bkgrp[grp]->CCDLc = m_config->tCCDL;
+            bk[j]->WTPc = m_config->tWTP;
+        }
         issued = true;
 
         if (bk[j]->mrq->data->get_access_type() == L2_WRBK_ACC)
@@ -627,12 +802,13 @@ bool dram_t::issue_col_command(int j) {
           n_wr++;
         unsigned current_bw = m_config->BL / m_config->data_command_freq_ratio;
         if (current_mode == PIM_MODE) {
-            bwutil += current_bw * m_config->nbk;
-            bwutil_partial += current_bw * m_config->nbk;
+            pim_bwutil += current_bw * m_config->nbk;
+            n_pim_wr++;
         } else {
             bwutil += current_bw;
             bwutil_partial += current_bw;
         }
+
 #ifdef DRAM_VERIFY
         PRINT_CYCLE = 1;
         printf(
@@ -659,18 +835,35 @@ bool dram_t::issue_row_command(int j) {
     // else
     if (!issued && !RRDc && (bk[j]->state == BANK_IDLE) && !bk[j]->RPc &&
         !bk[j]->RCc) {  //
-      printf("[DEBUG] access row address %lx\n", bk[j]->mrq->row);
       if (bk[j]->mrq->row == PIM_ENTER_MRS_ROW) {
-          pending_mode_transition = 1; 
-          printf("[PIM] Partition %d: ACT for PIM ENTER pending (Row: %03x)\n", id, bk[j]->mrq->row);
-      } else if (bk[j]->mrq->row == PIM_EXIT_MRS_ROW) {
-          pending_mode_transition = 2;
-          printf("[PIM] Partition %d: ACT for PIM EXIT pending (Row: %03x)\n", id, bk[j]->mrq->row);
-      } else {
-          pending_mode_transition = 0;
-      }
+        if (current_mode == NORMAL_MODE) {
+            pending_mode_transition = 1; 
+            printf("[PIM] Partition %d: ACT for PIM ENTER pending (Row: %03x)\n", id, bk[j]->mrq->row);
+        } else {
+            printf("[HW ERROR] Partition %d: Received PIM ENTER but already in PIM_MODE!\n", id);
+            pending_mode_transition = 0; 
+        }
+    } 
+    else if (bk[j]->mrq->row == PIM_EXIT_MRS_ROW) {
+        if (current_mode == PIM_MODE) {
+            pending_mode_transition = 2;
+            printf("[PIM] Partition %d: ACT for PIM EXIT pending (Row: %03x)\n", id, bk[j]->mrq->row);
 
-      if (current_mode == PIM_MODE) {
+            pim_has_last_act = false;
+        } else {
+            printf("[HW FATAL] Partition %d: Received PIM EXIT while in NORMAL_MODE! Packet Reordering Detected.\n", id);
+            pending_mode_transition = 0; 
+        }
+    }
+
+      if (current_mode == PIM_MODE && bk[j]->mrq->row != PIM_EXIT_MRS_ROW) {
+          if (pim_has_last_act && pim_last_act_row != bk[j]->mrq->row) {
+              RHT[pim_last_act_row].valid = true;
+              RHT[pim_last_act_row].target_row = bk[j]->mrq->row;
+          }
+          pim_last_act_row = bk[j]->mrq->row; // RHT update logic
+          pim_has_last_act = true;
+
           for (unsigned k = 0; k < m_config->nbk; k++) {
               bk[k]->curr_row = bk[j]->mrq->row;
               bk[k]->state = BANK_ACTIVE;
@@ -680,12 +873,12 @@ bool dram_t::issue_row_command(int j) {
               bk[k]->RASc   = m_config->tACTab + m_config->tRAS;
               bk[k]->RCc    = m_config->tACTab + m_config->tRC;
           }
-          
+
           RRDc = m_config->tACTab; 
           
           n_act_partial += m_config->nbk; 
           n_act += m_config->nbk;
-          
+          n_pim_actab++;
           prio = (j + 1) % m_config->nbk;
           issued = true;
 
@@ -696,23 +889,25 @@ bool dram_t::issue_row_command(int j) {
 #endif
       }
 
+      else{
+        // activate the row with current memory request
+        bk[j]->curr_row = bk[j]->mrq->row;
+        bk[j]->state = BANK_ACTIVE;
+        RRDc = m_config->tRRD;
+        bk[j]->RCDc = m_config->tRCD;
+        bk[j]->RCDWRc = m_config->tRCDWR;
+        bk[j]->RASc = m_config->tRAS;
+        bk[j]->RCc = m_config->tRC;
+        prio = (j + 1) % m_config->nbk;
+        issued = true;
+        n_act_partial++;
+        n_act++;
 #ifdef DRAM_VERIFY
-      PRINT_CYCLE = 1;
-      printf("\tACT BK:%d NewRow:%03x From:%03x \n", j, bk[j]->mrq->row,
-             bk[j]->curr_row);
+        PRINT_CYCLE = 1;
+        printf("\tACT BK:%d NewRow:%03x From:%03x \n", j, bk[j]->mrq->row,
+              bk[j]->curr_row);
 #endif
-      // activate the row with current memory request
-      bk[j]->curr_row = bk[j]->mrq->row;
-      bk[j]->state = BANK_ACTIVE;
-      RRDc = m_config->tRRD;
-      bk[j]->RCDc = m_config->tRCD;
-      bk[j]->RCDWRc = m_config->tRCDWR;
-      bk[j]->RASc = m_config->tRAS;
-      bk[j]->RCc = m_config->tRC;
-      prio = (j + 1) % m_config->nbk;
-      issued = true;
-      n_act_partial++;
-      n_act++;
+        }
     }
 
     else
@@ -726,6 +921,7 @@ bool dram_t::issue_row_command(int j) {
             current_mode = PIM_MODE;
             mode_transition_cycles = 10; // tMRS 지연시간 모델링
             pending_mode_transition = 0;
+            rph_enable_counter = 0;
             printf("[PIM] Partition %d: PRE completed. Mode Transition NORMAL -> PIM\n", id);
         } else if (pending_mode_transition == 2 && bk[j]->curr_row == PIM_EXIT_MRS_ROW) {
             current_mode = NORMAL_MODE;
@@ -733,17 +929,32 @@ bool dram_t::issue_row_command(int j) {
             pending_mode_transition = 0;
             printf("[PIM] Partition %d: PRE completed. Mode Transition PIM -> NORMAL\n", id);
         }
-        // make the bank idle again
-        bk[j]->state = BANK_IDLE;
-        bk[j]->RPc = m_config->tRP;
-        prio = (j + 1) % m_config->nbk;
-        issued = true;
-        n_pre++;
-        n_pre_partial++;
+        if (current_mode == PIM_MODE && bk[j]->mrq->row != PIM_EXIT_MRS_ROW) {
+            for (unsigned k = 0; k < m_config->nbk; k++) {
+                bk[k]->state = BANK_IDLE;
+                bk[k]->RPc = m_config->tRP;
+            }
+            // n_pre += m_config->nbk;
+            // n_pre_partial += m_config->nbk;
+            
+#ifdef DRAM_VERIFY
+            PRINT_CYCLE = 1;
+            printf("\t[PIM] PREab (All-Bank Precharge) Due to Row Change to %03x \n", bk[j]->mrq->row);
+#endif
+        }
+        else {
+          // make the bank idle again
+          bk[j]->state = BANK_IDLE;
+          bk[j]->RPc = m_config->tRP;
+          prio = (j + 1) % m_config->nbk;
+          issued = true;
+          n_pre++;
+          n_pre_partial++;
 #ifdef DRAM_VERIFY
         PRINT_CYCLE = 1;
         printf("\tPRE BK:%d Row:%03x \n", j, bk[j]->curr_row);
 #endif
+        }
       }
   }
   return issued;
@@ -780,6 +991,31 @@ void dram_t::print(FILE *simFile) const {
   fprintf(simFile,
           "\n------------------------------------------------------------------"
           "------\n");
+
+  printf("\n=== PIM %d Mode Statistics ===\n", id);
+  printf("PIM_Mode_Cycles = %llu \n", n_pim_cycles);
+  printf("PIM_Transition_Cycles = %llu \n", n_pim_transition_cycles);
+  printf("PIM_ACT_Delay_Cycles  = %llu \n", n_pim_act_cycles);
+  printf("PIM_PRE_Delay_Cycles  = %llu \n", n_pim_pre_cycles);
+  printf("PIM_ACTab_Commands    = %llu \n", n_pim_actab);
+  printf("PIM_Read_Commands     = %llu \n", n_pim_rd);
+  printf("PIM_Write_Commands    = %llu \n", n_pim_wr);
+  printf("PIM_BW_Average        = %.6f \n", (float)pim_bwutil);
+  if (n_pim_cycles > 0) {
+      unsigned current_bw = m_config->BL / m_config->data_command_freq_ratio;
+      // 2. n_pim_cycles 동안 최대로 내릴 수 있는 PIM 커맨드 횟수 = (총 PIM 사이클 / tCCD)
+      // 3. Peak PIM BW = 최대 커맨드 횟수 * 1회당 전송량(current_bw) * 뱅크 수(nbk)
+      double peak_pim_bwutil = ((double)n_pim_cycles / m_config->tCCDL) * current_bw * m_config->nbk;
+
+      double pim_bw_utilization = 0.0;
+      if (peak_pim_bwutil > 0) {
+          pim_bw_utilization = ((double)pim_bwutil / peak_pim_bwutil) * 100.0;
+      }
+      
+      printf("Peak_PIM_Internal_BW  = %.0f \n", peak_pim_bwutil);
+      printf("PIM_Internal_BW_Util(%%)= %.2f %% \n", pim_bw_utilization);
+  }
+  printf("===========================\n");
 
   printf("\nRow_Buffer_Locality = %.6f", (float)hits_num / access_num);
   printf("\nRow_Buffer_Locality_read = %.6f", (float)hits_read_num / read_num);

@@ -43,6 +43,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <map>
 #include "delayqueue.h"
 
 #define READ 'R'  // define read and write states
@@ -103,6 +104,13 @@ struct bank_t {
   unsigned int bkgrpindex;
 };
 
+struct rht_entry_t {
+  bool valid;
+  unsigned int target_row;
+  
+  rht_entry_t() : valid(false), target_row(0) {}
+};
+
 enum bank_index_function {
   LINEAR_BK_INDEX = 0,
   BITWISE_XORING_BK_INDEX,
@@ -153,6 +161,27 @@ class dram_t {
   unsigned int mode_transition_cycles; // tMRS (Mode Register Set) 등 전환 딜레이를 위한 카운터
   std::vector<uint32_t> IRF;           // PIM 명령어를 담을 Instruction Register File
 
+  unsigned long long n_pim_cycles;
+  unsigned long long n_pim_transition_cycles;
+
+  unsigned long long n_pim_rd;
+  unsigned long long n_pim_wr;
+
+  unsigned long long pim_bwutil;
+
+  unsigned long long n_pim_act_cycles;
+  unsigned long long n_pim_pre_cycles;
+
+  unsigned long long n_pim_actab;
+
+  unsigned int pim_last_act_row; // PIM 모드에서의 이전 활성화 Row
+  bool pim_has_last_act;         // PIM 모드 진입 후 ACT 발생 여부
+  std::map<unsigned int, rht_entry_t> RHT; // 단일 RHT
+
+  unsigned int rph_predicted_row; 
+  bool rph_predicted_valid;
+
+  unsigned int rph_enable_counter;
  private:
   bankgrp_t **bkgrp;
 

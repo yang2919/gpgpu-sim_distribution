@@ -136,6 +136,7 @@ class mem_fetch {
   bool is_ptw() const { return m_is_ptw; }
   void set_tlb_miss_va(new_addr_type va) { m_tlb_miss_va = va; }
   new_addr_type get_tlb_miss_va() const { return m_tlb_miss_va; }
+  void set_tlx_addr(const addrdec_t &addr) { m_raw_addr = addr; }
 
   void set_tlb_miss_start_time(unsigned long long t) { m_tlb_miss_start_time = t; }
   unsigned long long get_tlb_miss_start_time() const { return m_tlb_miss_start_time; }

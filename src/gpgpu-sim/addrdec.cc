@@ -94,6 +94,9 @@ new_addr_type linear_to_raw_address_translation::partition_address(
 
 void linear_to_raw_address_translation::addrdec_tlx(new_addr_type addr,
                                                     addrdec_t *tlx) const {
+  bool is_pim = (addr & (1ULL << 49)) != 0;
+  addr = addr & ~(1ULL << 49);  // Clear the PIM flag bit for address decoding
+
   unsigned long long int addr_for_chip, rest_of_addr, rest_of_addr_high_bits;
   if (!gap) {
     tlx->chip = addrdec_packbits(addrdec_mask[CHIP], addr, addrdec_mkhigh[CHIP],
@@ -128,6 +131,12 @@ void linear_to_raw_address_translation::addrdec_tlx(new_addr_type addr,
                                 addrdec_mkhigh[COL], addrdec_mklow[COL]);
     tlx->burst = addrdec_packbits(addrdec_mask[BURST], rest_of_addr,
                                   addrdec_mkhigh[BURST], addrdec_mklow[BURST]);
+  }
+
+  unsigned num_hbm_channels = m_n_channel / 2;
+  tlx->chip = tlx->chip % num_hbm_channels;
+  if (is_pim) {
+      tlx->chip += num_hbm_channels;
   }
 
   switch (memory_partition_indexing) {
@@ -189,41 +198,11 @@ void linear_to_raw_address_translation::addrdec_tlx(new_addr_type addr,
       // Do you custom index here
       break;
     case PIM: {
-      if (addr == PIM_ENTER_VADDR) {
-          tlx->chip = 0;       
-          tlx->bk   = 0;       
-          tlx->row  = 0x27FF;  
-          tlx->col  = 0;
-          tlx->burst = 0;
-          tlx->sub_partition = 0;
-          return; 
-      } 
-      else if (addr == PIM_EXIT_VADDR) {
-          tlx->chip = 0;
-          tlx->bk   = 0;
-          tlx->row  = 0x2FFF;  
-          tlx->col  = 0;
-          tlx->burst = 0;
-          tlx->sub_partition = 0;
-          return; 
+      if (tlx->row == PIM_ENTER_VA_ROW) {
+        tlx->row = PIM_ENTER_PA_ROW;
+      } else if (tlx->row == PIM_EXIT_VA_ROW) {
+        tlx->row = PIM_EXIT_PA_ROW;
       }
-      new_addr_type chip_address = (addr >> (ADDR_CHIP_S - log2sub_partition));
-      tr1_hash_map<new_addr_type, unsigned>::const_iterator got =
-          address_random_interleaving.find(chip_address);
-      if (got == address_random_interleaving.end()) {
-        unsigned new_chip_id =
-            rand() % (m_n_channel * m_n_sub_partition_in_channel);
-        address_random_interleaving[chip_address] = new_chip_id;
-        tlx->chip = new_chip_id / m_n_sub_partition_in_channel;
-        tlx->sub_partition = new_chip_id;
-      } else {
-        unsigned new_chip_id = got->second;
-        tlx->chip = new_chip_id / m_n_sub_partition_in_channel;
-        tlx->sub_partition = new_chip_id;
-      }
-      assert(tlx->chip < m_n_channel);
-      assert(tlx->sub_partition < m_n_channel * m_n_sub_partition_in_channel);
-      return;
       break;
     }
   

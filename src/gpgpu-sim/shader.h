@@ -1776,6 +1776,11 @@ struct shader_core_stats_pod {
   unsigned *m_num_sp_committed;
   unsigned *m_num_tlb_hits;
   unsigned *m_num_tlb_accesses;
+
+  unsigned long long *m_last_tlb_miss_cycle;
+  unsigned long long *m_sum_tlb_miss_interval;
+  unsigned *m_tlb_miss_interval_count;
+
   unsigned *m_num_sfu_committed;
   unsigned *m_num_tensor_core_committed;
   unsigned *m_num_mem_committed;
@@ -1898,6 +1903,9 @@ class shader_core_stats : public shader_core_stats_pod {
     m_num_tlb_hits = (unsigned *)calloc(config->num_shader(), sizeof(unsigned));
     m_num_tlb_accesses =
         (unsigned *)calloc(config->num_shader(), sizeof(unsigned));
+    m_last_tlb_miss_cycle = (unsigned long long *)calloc(config->num_shader(), sizeof(unsigned long long));
+    m_sum_tlb_miss_interval = (unsigned long long *)calloc(config->num_shader(), sizeof(unsigned long long));
+    m_tlb_miss_interval_count = (unsigned *)calloc(config->num_shader(), sizeof(unsigned));
     m_active_sp_lanes =
         (unsigned *)calloc(config->num_shader(), sizeof(unsigned));
     m_active_sfu_lanes =
@@ -1979,6 +1987,9 @@ class shader_core_stats : public shader_core_stats_pod {
     free(m_num_sp_committed);
     free(m_num_tlb_hits);
     free(m_num_tlb_accesses);
+    free(m_last_tlb_miss_cycle);
+    free(m_sum_tlb_miss_interval);
+    free(m_tlb_miss_interval_count);
     free(m_num_sfu_committed);
     free(m_num_tensor_core_committed);
     free(m_num_mem_committed);
@@ -2677,6 +2688,7 @@ class simt_core_cluster {
   float get_current_occupancy(unsigned long long &active,
                               unsigned long long &total) const;
   virtual void create_shader_core_ctx() = 0;
+  class shader_core_ctx *get_core(unsigned i) const { return m_core[i]; }
 
  protected:
   unsigned m_cluster_id;

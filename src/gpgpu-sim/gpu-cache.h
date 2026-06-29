@@ -2246,6 +2246,18 @@ public:
 
     void cycle();
 
+    unsigned long long m_l2_tlb_accesses = 0;
+    unsigned long long m_l2_tlb_misses = 0;
+
+    void print_l2_tlb_stats() const{
+        double miss_rate = m_l2_tlb_accesses > 0 ? static_cast<double>(m_l2_tlb_misses) / m_l2_tlb_accesses : 0.0;
+        printf("\n========= L2 TLB STATS =========\n");
+        printf("L2 TLB Total Accesses : %llu\n", m_l2_tlb_accesses);
+        printf("L2 TLB Total Misses   : %llu\n", m_l2_tlb_misses);
+        printf("L2 TLB Miss Rate      : %.4f%%\n", miss_rate);
+        printf("================================\n");
+    }
+
 private:
     const l2_tlb_config &m_config;
     class gpgpu_sim *m_gpu;
